@@ -77,8 +77,9 @@ static inline void setBootPixelBlack(uint8_t* row, uint16_t x, int pitch, int bi
     } else {
         int bytePos = x / 2;
         if (bytePos < pitch) {
-            if ((x % 2) == 0) row[bytePos] = (row[bytePos] & 0x0F);
-            else row[bytePos] = (row[bytePos] & 0xF0);
+            uint8_t black = colorScheme == OD_COLOR_SCHEME_INDEXED16_2PASS ? 4u : 0u;
+            if ((x % 2) == 0) row[bytePos] = (uint8_t)((row[bytePos] & 0x0F) | (black << 4));
+            else row[bytePos] = (uint8_t)((row[bytePos] & 0xF0) | black);
         }
     }
     (void)colorScheme;
@@ -207,6 +208,7 @@ static void formatBootColorSchemeText(uint8_t scheme, char* out, uint16_t outSiz
         case OD_COLOR_SCHEME_BWGBRY:       snprintf(out, outSize, "6 color"); break;
         case OD_COLOR_SCHEME_BWGBRY_SPLIT: snprintf(out, outSize, "6c split"); break;
         case OD_COLOR_SCHEME_GRAY4:        snprintf(out, outSize, "4 gray"); break;
+        case OD_COLOR_SCHEME_INDEXED16_2PASS: snprintf(out, outSize, "16 codes"); break;
         case OD_COLOR_SCHEME_GRAY16:       snprintf(out, outSize, "16 gray"); break;
         case OD_COLOR_SCHEME_SEVEN_COLOR:  snprintf(out, outSize, "7 color"); break;
         default:                   snprintf(out, outSize, "?"); break;
@@ -488,6 +490,10 @@ bool od_boot_screen_render(const struct od_config *cfg,
     uint8_t whiteValue = (colorScheme < sizeof(kSchemeWhiteValue))
         ? kSchemeWhiteValue[colorScheme]
         : 0xFF;
+    const bool indexedPasses = colorScheme == OD_COLOR_SCHEME_INDEXED16_2PASS;
+    const bool indexedTranspose = indexedPasses &&
+        cfg->displays[0].panel_ic_type == OD_PANEL_IC_HANSHOW_PRO154QN;
+    if (indexedPasses) whiteValue = 0x55;
 
     // Footer color swatches: one box per color the scheme can produce, 1px black border.
     const int footerPadTop = useZoneLayout ? 8 : 0;
@@ -530,6 +536,12 @@ bool od_boot_screen_render(const struct od_config *cfg,
                 bootGray4FillSwatchCodes(cfg->displays[0].panel_ic_type, direct2bpp, swatchCode);
                 numSwatches = 4;
                 break;
+            case OD_COLOR_SCHEME_INDEXED16_2PASS: {
+                static const uint8_t codes[] = {4, 5, 9, 13, 1, 6, 7};
+                memcpy(swatchCode, codes, sizeof(codes));
+                numSwatches = (int)sizeof(codes);
+                break;
+            }
             case OD_COLOR_SCHEME_GRAY16:
                 for (int i = 0; i < 16; i++) swatchCode[i] = (uint8_t)i;
                 numSwatches = 16;
@@ -803,7 +815,7 @@ bool od_boot_screen_render(const struct od_config *cfg,
     // de-interleave. Every other scheme writes a single packed plane in one pass.
     const bool gray4Split = (colorScheme == OD_COLOR_SCHEME_GRAY4) && !direct2bpp;
     const int planePitch = (w + 7) / 8;
-    const int planePasses = (gray4Split || colorSwatchPlane1) ? 2 : 1;
+    const int planePasses = (gray4Split || colorSwatchPlane1 || indexedPasses) ? 2 : 1;
     const uint8_t segments = od_boot_app_segments();
     const size_t rowRequired = (size_t)pitch + (gray4Split ? (size_t)planePitch : 0u);
     bool outputOk = true;
@@ -815,7 +827,7 @@ bool od_boot_screen_render(const struct od_config *cfg,
     for (uint8_t segment = 0; segment < segments && outputOk; segment++) {
       for (int pass = 0; pass < planePasses && outputOk; pass++) {
         const int bitSel = pass;  // pass 0 -> LSB/PLANE_0, pass 1 -> MSB/PLANE_1
-        const int targetPlane = (gray4Split || colorSwatchPlane1)
+        const int targetPlane = (gray4Split || colorSwatchPlane1 || indexedPasses)
             ? (pass == 0 ? OD_BOOT_PLANE_PRIMARY : OD_BOOT_PLANE_SECOND)
             : (useBitplanes ? OD_BOOT_PLANE_PRIMARY : od_boot_app_default_plane(colorScheme));
         const int ls = bootLineStep(middleScaleText);
@@ -834,13 +846,17 @@ bool od_boot_screen_render(const struct od_config *cfg,
         for (uint16_t y_native = 0; y_native < h && outputOk; y_native++) {
             memset(row, colorPlanePass ? 0x00 : whiteValue, pitch);
             for (uint16_t x_native = 0; x_native < w; x_native++) {
-                // Map native pixel to logical (user-visible) coordinates
+                /* 154 storage traverses physical columns; 266 traverses reversed rows.
+                 * Evaluate those pixels directly so each pass needs only one packed line. */
+                uint16_t sourceX = indexedTranspose ? y_native : x_native;
+                uint16_t sourceY = indexedTranspose ? x_native :
+                    (indexedPasses ? (uint16_t)(h - 1u - y_native) : y_native);
                 uint16_t lx, ly;
                 switch (rotation) {
-                    case 1:  lx = y_native; ly = (uint16_t)(h_log - 1u - x_native); break; // 90° CW
-                    case 2:  lx = (uint16_t)(w_log - 1u - x_native); ly = (uint16_t)(h_log - 1u - y_native); break; // 180°
-                    case 3:  lx = (uint16_t)(w_log - 1u - y_native); ly = x_native; break; // 270° CW
-                    default: lx = x_native; ly = y_native; break;
+                    case 1:  lx = sourceY; ly = (uint16_t)(h_log - 1u - sourceX); break; // 90° CW
+                    case 2:  lx = (uint16_t)(w_log - 1u - sourceX); ly = (uint16_t)(h_log - 1u - sourceY); break; // 180°
+                    case 3:  lx = (uint16_t)(w_log - 1u - sourceY); ly = sourceX; break; // 270° CW
+                    default: lx = sourceX; ly = sourceY; break;
                 }
 
                 if (colorPlanePass) {

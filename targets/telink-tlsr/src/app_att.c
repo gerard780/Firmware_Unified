@@ -69,9 +69,27 @@ static const u8  my_OtaCharVal[19] = {
     TELINK_SPP_DATA_OTA,
 };
 static u8 s_ota_armed;
+static u8 s_ota_initialized;
+
+static void ota_result(int result)
+{
+    /* A successful OTA reboot must not look like a watchdog hang. */
+    if (result == OTA_SUCCESS) {
+        tlsr_port_crumb(0);
+    }
+}
 
 void tlsr_port_ota_arm(bool on)
 {
+    /* SDK initialization erases the alternate firmware bank. Claim it only after
+     * ENTER_DFU, retaining factory data and recovery images during ordinary boots.
+     * Reconnecting or rearming must not erase an upload already in progress. */
+    if (on && !s_ota_initialized) {
+        blc_ota_initOtaServer_module();
+        blc_ota_setOtaProcessTimeout(300);
+        blc_ota_registerOtaResultIndicationCb(ota_result);
+        s_ota_initialized = 1;
+    }
     s_ota_armed = on ? 1 : 0;
 }
 
@@ -84,7 +102,8 @@ static int ota_write(void *p)
 }
 
 static const u8 my_odCharVal[5] = {
-    CHAR_PROP_WRITE | CHAR_PROP_WRITE_WITHOUT_RSP | CHAR_PROP_NOTIFY,
+    CHAR_PROP_WRITE | CHAR_PROP_NOTIFY |
+        (OD_TLSR_ATT_WRITE_COMMAND ? CHAR_PROP_WRITE_WITHOUT_RSP : 0),
     U16_LO(OD_DP_H), U16_HI(OD_DP_H),
     U16_LO(OD_UUID16), U16_HI(OD_UUID16)
 };

@@ -10,7 +10,7 @@
  *   fully-correct client from THIS FILE ALONE, without reading firmware.
  *
  *   OD_PROTOCOL_VERSION 2.2   (MAJOR.MINOR; see VERSIONING POLICY below)
- *   LAST CHANGED        2026-07-25
+ *   LAST CHANGED        2026-10-05
  *
  * --------------------------------------------------------------------------
  * VERSIONING POLICY
@@ -53,6 +53,9 @@
  *            new version heading on each bump -- see AGENT INSTRUCTIONS below)
  * --------------------------------------------------------------------------
  *   Unreleased (since 2.2)
+ *     - Doc-only: document Telink direct-write and INDEXED16_2PASS timing.
+ *       No new opcode, framing change, or PIPE support; see structs.h and
+ *       docs/indexed16-2pass.md for the additive image-format contract.
  *     - LAN framing: cap the WIRE frame ([len:2 LE] prefix + payload) at a new
  *       constant OD_LAN_MAX_FRAME (4096); OD_LAN_MAX_PAYLOAD is now DERIVED as
  *       OD_LAN_MAX_FRAME - 2 = 4094 (was a standalone 4096, which made the max
@@ -233,6 +236,9 @@
  *   Firmware   : combined nRF52840 + ESP32 (PlatformIO). Implements PIPE
  *                (0x0080/0x0081/0x0082) and 0x0045/0x0075/0x0076/0x0077.
  *                NO NFC. Here 0x0082 == PIPE_WRITE_END.
+ *   Telink     : Firmware_Unified targets/telink-tlsr. Direct-write
+ *                0x0070/0x0071/0x0072; PIPE disabled. INDEXED16_2PASS uses
+ *                full-frame direct write only; no partial-image support.
  *   NRF54      : Firmware_NRF54 (nRF54, Zephyr). Implements NFC (0x0083) and
  *                0x0045/0x0075/0x0076/0x0077. NO PIPE 0x0080/0x0081.
  *   Silabs     : Firmware_Silabs (EFR32 Flex). Config r/w/chunk, fw-ver, MSD,
@@ -499,8 +505,11 @@
  * @response: [0x00][0x70] (RESP_DIRECT_WRITE_START_ACK) on accept.
  * @errors:   [0xFF][0x70] (RESP_DIRECT_WRITE_ERROR path) on setup failure.
  * @state:    begins a full-frame image session; a new START aborts any prior one.
+ *            INDEXED16_2PASS: ACK may wait through the first refresh if initial
+ *            compressed bytes reach the component boundary; allow 215 seconds.
+ *            See docs/indexed16-2pass.md; the wire layout remains unchanged.
  * @limits:   START plaintext <= 200 bytes (encrypted: fit within 154 budget).
- * @targets:  Firmware | NRF54 | Silabs | NRF52811
+ * @targets:  Firmware | NRF54 | Silabs | NRF52811 | Telink
  * -------------------------------------------------------------------------- */
 #define CMD_DIRECT_WRITE_START         0x0070u
 
@@ -511,8 +520,10 @@
  * @errors:   [0xFF][0x71] on write/decompress/overflow; for a partial (0x76)
  *            session the NACK data byte is an OD_ERR_PARTIAL_* code.
  * @state:    must follow a 0x70 or 0x76 START; also carries partial-stream data.
+ *            INDEXED16_2PASS: first refresh runs at the full-frame component
+ *            boundary before ACK; allow 215 seconds for a crossing chunk.
  * @limits:   <= 230 bytes (unencrypted) / <= 154 (encrypted).
- * @targets:  Firmware | NRF54 | Silabs | NRF52811
+ * @targets:  Firmware | NRF54 | Silabs | NRF52811 | Telink
  * -------------------------------------------------------------------------- */
 #define CMD_DIRECT_WRITE_DATA          0x0071u
 
@@ -527,8 +538,13 @@
  *            [0xFF][0x72] if the transfer was incomplete (missing bytes / zlib flush).
  * @errors:   NACK on incompleteness; refresh reported via 0x73/0x74.
  * @state:    finalizes the 0x70 session and triggers the panel refresh.
+ *            INDEXED16_2PASS: only FULL (refresh=0) is supported. END ACK means
+ *            complete input; success notification means both passes refreshed
+ *            and shut down. Compressed finalization can cross the component
+ *            boundary before ACK; allow 215 seconds for that ACK and for the
+ *            final refresh notification separately.
  * @limits:   -
- * @targets:  Firmware | NRF54 | Silabs | NRF52811
+ * @targets:  Firmware | NRF54 | Silabs | NRF52811 | Telink
  * -------------------------------------------------------------------------- */
 #define CMD_DIRECT_WRITE_END           0x0072u
 

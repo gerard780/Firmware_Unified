@@ -29,6 +29,11 @@ static uint8_t g_bwr_primary_color;
 static uint8_t g_bwr_secondary_color;
 static uint8_t g_gray4_plane[2][4];
 static uint8_t g_gray4_direct[4];
+/* Host-only physical reference; production retains its single packed line. */
+static uint8_t g_physical_reference[296][200];
+static uint16_t g_capture_width, g_capture_height;
+static unsigned g_capture_mode;
+static bool g_capture_transpose;
 
 static void reset_fake(void)
 {
@@ -48,6 +53,7 @@ static void reset_fake(void)
   g_bwr_secondary_color = 0u;
   memset(g_gray4_plane, 0xff, sizeof(g_gray4_plane));
   memset(g_gray4_direct, 0xff, sizeof(g_gray4_direct));
+  g_capture_mode = 0u;
 }
 
 static void hash_byte(uint8_t value)
@@ -84,6 +90,19 @@ int od_boot_app_write_row(uint16_t y, uint8_t segment, const uint8_t *row, uint1
   hash_byte(segment); hash_byte((uint8_t)y); hash_byte((uint8_t)(y >> 8));
   hash_byte((uint8_t)len); hash_byte((uint8_t)(len >> 8));
   for (uint16_t i = 0; i < len; i++) hash_byte(row[i]);
+  if (g_capture_mode != 0u) {
+    assert(segment == 0u && y < g_capture_height);
+    for (uint16_t x = 0u; x < g_capture_width; ++x) {
+      if (g_capture_mode == 1u) {
+        g_physical_reference[y][x] = (uint8_t)((row[x / 8u] >> (7u - x % 8u)) & 1u);
+      } else {
+        uint16_t physical_x = g_capture_transpose ? y : x;
+        uint16_t physical_y = g_capture_transpose ? x : (uint16_t)(g_capture_height - 1u - y);
+        uint8_t code = (uint8_t)((row[x / 2u] >> (x % 2u == 0u ? 4u : 0u)) & 15u);
+        assert(code == (g_physical_reference[physical_y][physical_x] ? 5u : 4u));
+      }
+    }
+  }
   if (y == 280u && len > 41u) {
     if (g_current_plane == OD_BOOT_PLANE_PRIMARY) {
       g_bwr_primary_black = (uint8_t)((row[6] >> 5) & 1u);   /* x=50, black swatch */
@@ -135,7 +154,7 @@ int od_boot_app_bits_per_pixel(uint8_t scheme)
    * silently rendered the split case at 1 bpp, which is the same omission the renderer's own
    * scheme table had. A fake that is wrong the same way as the code proves nothing. */
   if (scheme == OD_COLOR_SCHEME_BWGBRY || scheme == OD_COLOR_SCHEME_BWGBRY_SPLIT ||
-      scheme == OD_COLOR_SCHEME_GRAY16) return 4;
+      scheme == OD_COLOR_SCHEME_GRAY16 || scheme == OD_COLOR_SCHEME_INDEXED16_2PASS) return 4;
   return 1;
 }
 
@@ -180,8 +199,44 @@ static bool render(struct od_config *cfg, struct SecurityConfig *sec,
   return od_boot_screen_render(cfg, sec, &bufs);
 }
 
+static void test_hanshow_physical_orientation(void)
+{
+  struct od_config cfg;
+  struct SecurityConfig sec;
+  uint8_t row[128], qr[256];
+  for (unsigned panel = 0u; panel < 2u; ++panel) {
+    uint16_t width = panel == 0u ? 200u : 152u;
+    uint16_t height = panel == 0u ? 200u : 296u;
+    for (uint8_t rotation = 0u; rotation < 4u; ++rotation) {
+      reset_fake();
+      make_case(&cfg, &sec, width, height, OD_COLOR_SCHEME_MONO);
+      cfg.displays[0].rotation = rotation;
+      g_capture_width = width; g_capture_height = height;
+      g_capture_mode = 1u;
+      assert(render(&cfg, &sec, row, sizeof(row), qr, sizeof(qr)));
+      /* Text and QR form an asymmetric reference that exposes a rotated or
+       * mirrored controller walk even though154 is square. */
+      unsigned asymmetric = 0u;
+      for (uint16_t y = 0u; y < height; ++y) {
+        for (uint16_t x = 0u; x < width; ++x) {
+          if (panel == 0u) asymmetric += g_physical_reference[y][x] != g_physical_reference[x][y];
+          else asymmetric += g_physical_reference[y][x] != g_physical_reference[height - 1u - y][x];
+        }
+      }
+      assert(asymmetric > 0u);
+      reset_fake();
+      cfg.displays[0].color_scheme = OD_COLOR_SCHEME_INDEXED16_2PASS;
+      cfg.displays[0].panel_ic_type = panel == 0u ? OD_PANEL_IC_HANSHOW_PRO154QN : OD_PANEL_IC_HANSHOW_PRO266QN;
+      g_capture_mode = 2u; g_capture_transpose = panel == 0u;
+      assert(render(&cfg, &sec, row, sizeof(row), qr, sizeof(qr)));
+      assert(g_begin_planes == 2u && g_writes == 2u * height);
+    }
+  }
+}
+
 int main(void)
 {
+  test_hanshow_physical_orientation();
   struct od_config cfg;
   struct SecurityConfig sec;
   uint8_t row[600];

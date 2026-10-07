@@ -97,6 +97,7 @@ test-scope narrative in this file, it belongs in the checklist instead.
   temperature in the MSD, and wireless updates of its own (gated by ENTER_DFU). tc32 must not build at `-Os` (broken jump tables; the build checks).
   Checklist § `telink-tlsr` has the rows.
 - **Never hardware-verified:** the WiFi/LAN transport, and the F4/F7 correctness fixes.
+- **Native Hanshow Q-N:** scoped Pro-266Q-N and Pro-154Q-N streaming, palette and controller-temperature checks are recorded in `docs/HARDWARE_VERIFICATION_CHECKLIST.md` § Native Hanshow Q-N.
 - Arduino shim fully removed from `esp32-idf` (docs/ARCHIVE_esp32_arduino_shim.md);
   `targets/esp32-idf/vendor/fastepd/` is its permanent (non-shim) FastEPD adapter.
 - **The wire corpus (`tests/vectors/dispatch.json`) is checked from both ends**:

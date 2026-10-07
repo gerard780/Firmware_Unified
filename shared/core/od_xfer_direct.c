@@ -138,6 +138,13 @@ od_cmd_result_t od_xfer_direct_data_impl(const od_cmd_ctx_t *ctx, od_span_t body
             ? state->expected_bytes - state->written_bytes : 0u;
         const uint32_t offered = body.n < remaining ? (uint32_t)body.n : remaining;
 
+        if (state->geometry.layout == OD_COLOR_LAYOUT_REFRESH_PASSES && body.n > remaining) {
+            od_xfer_fail_active(OD_XFER_TERM_SIZE_EXCEEDED, "DATA", -1,
+                                state->written_bytes, (uint32_t)body.n,
+                                OD_XFER_ABORT_STREAM_FAILED, false);
+            od_xfer_reply_simple_error(ctx, RESP_DIRECT_WRITE_DATA_ACK);
+            return OD_CMD_NACK;
+        }
         if (offered > 0u) {
             const od_span_t prefix = od_span_take(body, offered);
             const uint32_t offset = state->written_bytes;
@@ -252,6 +259,12 @@ od_cmd_result_t od_xfer_direct_end_impl(const od_cmd_ctx_t *ctx, od_span_t body)
         od_xfer_log_owner_mismatch(CMD_DIRECT_WRITE_END);
         return OD_CMD_OK;
     }
+    if (state->geometry.layout == OD_COLOR_LAYOUT_REFRESH_PASSES && body.n > 0u && body.p[0] != OD_REFRESH_FULL) {
+        od_xfer_fail_active(OD_XFER_TERM_REFRESH_FAILED, "END", -1, 0u, 0u,
+                            OD_XFER_ABORT_REFRESH_FAILED, false);
+        od_xfer_reply_simple_error(ctx, RESP_DIRECT_WRITE_END_ACK);
+        return OD_CMD_NACK;
+    }
     if (state->compressed) {
         const od_xfer_stream_result_t result = od_xfer_stream_push(od_span_none(), true);
         if (result != OD_XFER_STREAM_OK) {
@@ -261,7 +274,8 @@ od_cmd_result_t od_xfer_direct_end_impl(const od_cmd_ctx_t *ctx, od_span_t body)
             od_xfer_reply_simple_error(ctx, RESP_DIRECT_WRITE_END_ACK);
             return OD_CMD_NACK;
         }
-    } else if (state->geometry.layout == OD_COLOR_LAYOUT_CONTROLLER_PLANES
+    } else if ((state->geometry.layout == OD_COLOR_LAYOUT_CONTROLLER_PLANES ||
+                state->geometry.layout == OD_COLOR_LAYOUT_REFRESH_PASSES)
                && state->written_bytes != state->expected_bytes) {
         od_xfer_fail_active(OD_XFER_TERM_INCOMPLETE, "END", -1, 0u, 0u,
                             OD_XFER_ABORT_INCOMPLETE, false);

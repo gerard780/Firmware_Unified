@@ -22,6 +22,23 @@ if(NOT EXISTS "${TELINK_SDK_DIR}/tl_common.h")
 endif()
 
 set(SRC "${CMAKE_CURRENT_LIST_DIR}/src")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+set(OD_TLSR_SRAM_KIB 64 CACHE STRING "Physical SRAM ceiling: 32 or 64 KiB")
+if(NOT OD_TLSR_SRAM_KIB MATCHES "^(32|64)$")
+  message(FATAL_ERROR "OD_TLSR_SRAM_KIB must be 32 or 64")
+endif()
+set(OD_TLSR_LAYOUT "${CMAKE_BINARY_DIR}/memory-profile")
+execute_process(COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/tools/prepare_memory_profile.py
+                --sdk ${TELINK_SDK_DIR} --output ${OD_TLSR_LAYOUT} --sram-kib ${OD_TLSR_SRAM_KIB}
+                RESULT_VARIABLE OD_LAYOUT_RESULT)
+if(NOT OD_LAYOUT_RESULT EQUAL 0)
+  message(FATAL_ERROR "Unable to prepare bounded SDK startup/linker")
+endif()
+
+set(OD_HANSHOW_WAVEFORM_SOURCE "" CACHE FILEPATH "Private generated owner-provided Hanshow waveform C source")
+if(OD_HANSHOW_WAVEFORM_SOURCE AND NOT EXISTS "${OD_HANSHOW_WAVEFORM_SOURCE}")
+  message(FATAL_ERROR "Private waveform source does not exist; run tools/provision_hanshow_waveforms.py first")
+endif()
 
 # ---------------------------------------------------------------------------- shared/ ---
 include(${OD_REPO_ROOT}/shared/sources.cmake)
@@ -42,6 +59,11 @@ set(OD_PROFILE_TELINK
     OD_CONFIG_WITH_WIFI=0
     OD_CONFIG_WITH_DATA_EXTENDED=1)   # identity strings (0x2C); 288 B, and the boot-screen header lines
 set(OD_TELINK_DEFS ${OD_PROFILE_TELINK})
+if(OD_TLSR_SRAM_KIB EQUAL 32)
+  list(REMOVE_ITEM OD_TELINK_DEFS OD_RXQ_SLOTS=8u)
+  list(APPEND OD_TELINK_DEFS OD_RXQ_SLOTS=3u OD_CONFIG_MAX_SIZE=1536u
+       OD_TLSR_INFLATE_SCRATCH=64u OD_TLSR_BOOT_ROW=128u)
+endif()
 od_select_log_profile(info OD_TELINK_DEFS)
 
 set(OD_TELINK_SHARED_SOURCES
@@ -70,11 +92,13 @@ add_library(od_side OBJECT
     ${SRC}/od_xfer_tlsr.c
     ${SRC}/od_led_tlsr.c
     # Panel drivers imported from Firmware_NRF52 (EPD/, 71b870c1); epd_io.c is their I/O here.
+    ${SRC}/epd/hanshow_qn.c
     ${SRC}/epd/UC81xx.c
     ${SRC}/epd/SSD16xx.c
     ${SRC}/epd/TI97xx.c
     ${SRC}/epd/epd_models.c
-    ${SRC}/epd/epd_io.c)
+    ${SRC}/epd/epd_io.c
+    ${OD_HANSHOW_WAVEFORM_SOURCE})
 target_include_directories(od_side PRIVATE ${OD_SHARED_INCLUDE_DIRS} ${SRC} ${SRC}/epd)
 # The boot logo is only drawn on 400x300 and larger; one size keeps ~70 KB of bitmap out of flash.
 target_compile_definitions(od_side PRIVATE ${OD_TELINK_DEFS} OD_BOOT_LOGO_SIZES=1)
@@ -96,7 +120,7 @@ file(GLOB TELINK_SDK_C
 
 add_library(sdk_side OBJECT
     ${TELINK_SDK_C}
-    ${TELINK_SDK_DIR}/boot/B85/cstartup_825x.S
+    ${OD_TLSR_LAYOUT}/cstartup_825x.S
     ${TELINK_SDK_DIR}/common/div_mod.S
     ${SRC}/main.c
     ${SRC}/app.c
@@ -106,6 +130,10 @@ target_include_directories(sdk_side PRIVATE
     ${TELINK_SDK_DIR} ${TELINK_SDK_DIR}/drivers/B85 ${TELINK_SDK_DIR}/vendor/common
     ${TELINK_SDK_DIR}/common ${SRC})
 target_compile_definitions(sdk_side PRIVATE CHIP_TYPE=CHIP_TYPE_825x MCU_STARTUP_8258=1)
+if(OD_TLSR_SRAM_KIB EQUAL 32)
+  # The bounded profile advertises the qualified ATT Write Request transport.
+  target_compile_definitions(sdk_side PRIVATE OD_TLSR_LL_FIFO_NUM=4 OD_TLSR_ATT_WRITE_COMMAND=0)
+endif()
 target_compile_options(sdk_side PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu99 -O2 -ffunction-sections -fdata-sections -Wall
                             -fpack-struct -fshort-enums -finline-small-functions
@@ -122,7 +150,7 @@ add_executable(opendisplay_tlsr.elf $<TARGET_OBJECTS:sdk_side> $<TARGET_OBJECTS:
 set_target_properties(opendisplay_tlsr.elf PROPERTIES LINKER_LANGUAGE C)
 target_link_options(opendisplay_tlsr.elf PRIVATE
     --gc-sections
-    -T ${TELINK_SDK_DIR}/project/tlsr_tc32/B85/boot.link
+    -T ${OD_TLSR_LAYOUT}/boot.link
     -Map ${CMAKE_BINARY_DIR}/opendisplay_tlsr.map)
 target_link_libraries(opendisplay_tlsr.elf PRIVATE
     -L${TELINK_SDK_DIR}/proj_lib -llt_825x -llt_general_stack
@@ -130,7 +158,6 @@ target_link_libraries(opendisplay_tlsr.elf PRIVATE
 
 # Telink's check_fw step: CRC32 tail + length field. Updaters (Telink OTA, ATC_BLE_OEPL) refuse
 # an image without it. finish_image.py is a portable reimplementation, verified against ATC's image.
-find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_command(TARGET opendisplay_tlsr.elf POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary opendisplay_tlsr.elf opendisplay_tlsr.bin
     COMMAND ${CMAKE_SIZE} opendisplay_tlsr.elf
@@ -138,5 +165,8 @@ add_custom_command(TARGET opendisplay_tlsr.elf POST_BUILD
             ${CMAKE_BINARY_DIR}/opendisplay_tlsr.bin
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/tools/check_jump_tables.py
             ${TC32_TOOLCHAIN_DIR}/bin/tc32-elf-objdump opendisplay_tlsr.elf opendisplay_tlsr.bin
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/tools/check_memory.py
+            --nm ${TC32_TOOLCHAIN_DIR}/bin/tc32-elf-nm --elf opendisplay_tlsr.elf
+            --image opendisplay_tlsr.bin --sram-kib ${OD_TLSR_SRAM_KIB} --report memory.json
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     BYPRODUCTS ${CMAKE_BINARY_DIR}/opendisplay_tlsr.bin)

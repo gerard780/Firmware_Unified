@@ -24,6 +24,11 @@
 #define ACL_CONN_MAX_RX_OCTETS           251
 #define ACL_CONN_MAX_TX_OCTETS           251
 
+/* GATT advertises only transports supported by the selected memory profile. */
+#ifndef OD_TLSR_ATT_WRITE_COMMAND
+#define OD_TLSR_ATT_WRITE_COMMAND        1
+#endif
+
 #define CLOCK_SYS_CLOCK_HZ               48000000
 #define MODULE_WATCHDOG_ENABLE           1
 #define WATCHDOG_INIT_TIMEOUT            4000    /* ms; main loop and long waits clear it */

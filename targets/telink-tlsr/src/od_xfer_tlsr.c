@@ -14,8 +14,10 @@
 #include "od_inflate_app.h"
 #include "od_nfc_app.h"
 #include "od_xfer_app.h"
+#include "od_core.h"
 
 #include "EPD_driver.h"
+#include "hanshow_qn.h"
 #include "od_color.h"
 #include "od_hal_time.h"
 #include "od_tlsr.h"
@@ -30,6 +32,7 @@
 
 static struct {
     bool                active;
+    bool                hanshow;
     epd_model_t        *epd;
     od_color_geometry_t geometry;
     uint32_t            plane_size;   /* bytes in plane 0 when the layout has two planes */
@@ -37,7 +40,10 @@ static struct {
 } s_xfer;
 
 static uint32_t s_displayed_etag;
-static uint8_t  s_inflate_scratch[256];
+#ifndef OD_TLSR_INFLATE_SCRATCH
+#define OD_TLSR_INFLATE_SCRATCH 256u
+#endif
+static uint8_t  s_inflate_scratch[OD_TLSR_INFLATE_SCRATCH];
 
 static const struct DisplayConfig *display_cfg(void)
 {
@@ -52,7 +58,7 @@ static const struct DisplayConfig *display_cfg(void)
 static bool panel_type_known(uint16_t t)
 {
     /* 1031 HS_266_BWR, 1032 HS_200_BWY, 1033 HS_350_BWY, 1034 TI_970_BWR: provisional */
-    return t >= 1000u && t <= 1034u;
+    return t >= 1000u && t <= OD_PANEL_IC_HANSHOW_PRO266QN;
 }
 
 /* Panels split over two controllers, whose right half is selected by DisplayConfig.cs_pin_2. */
@@ -92,12 +98,44 @@ static bool scheme_matches(uint8_t scheme, epd_color_t color)
     }
 }
 
+static uint32_t s_panel_link_tag;
+static uint32_t s_panel_activity_ms;
+
+void od_tlsr_panel_poll(void)
+{
+    if (s_xfer.active && s_xfer.hanshow &&
+        (uint32_t)(od_hal_uptime_ms() - s_panel_activity_ms) > 30000u) od_core_reset();
+}
+
+static bool panel_link_alive(void)
+{
+    return tlsr_port_connected() && od_tlsr_link_tag() == s_panel_link_tag;
+}
+
+static bool panel_boot_idle(void)
+{
+    return !tlsr_port_connected();
+}
+
+static bool hanshow_panel(uint16_t panel)
+{
+    return panel == OD_PANEL_IC_HANSHOW_PRO154QN || panel == OD_PANEL_IC_HANSHOW_PRO266QN;
+}
+
+static bool hanshow_config_valid(const struct DisplayConfig *d)
+{
+    return d != NULL && d->color_scheme == OD_COLOR_SCHEME_INDEXED16_2PASS &&
+           ((d->panel_ic_type == OD_PANEL_IC_HANSHOW_PRO154QN && d->pixel_width == 200u && d->pixel_height == 200u) ||
+            (d->panel_ic_type == OD_PANEL_IC_HANSHOW_PRO266QN && d->pixel_width == 152u && d->pixel_height == 296u));
+}
+
 static void panel_down(void)
 {
+    if (s_xfer.hanshow) hanshow_qn_abort();
     if (s_xfer.epd != NULL) {
         s_xfer.epd->drv->sleep(s_xfer.epd);
     }
-    EPD_GPIO_Uninit();
+    if (!s_xfer.hanshow) EPD_GPIO_Uninit();
     memset(&s_xfer, 0, sizeof(s_xfer));
     s_xfer.plane = -1;
     tlsr_port_stay_awake(TLSR_PORT_AWAKE_PANEL, false);
@@ -117,6 +155,8 @@ bool od_xfer_app_panel_info(od_xfer_panel_info_t *out)
     if (out == NULL || d == NULL || !panel_type_known(d->panel_ic_type)) {
         return false;
     }
+    if (hanshow_panel(d->panel_ic_type) && !hanshow_config_valid(d)) return false;
+    if (!hanshow_panel(d->panel_ic_type) && d->color_scheme == OD_COLOR_SCHEME_INDEXED16_2PASS) return false;
     memset(out, 0, sizeof(*out));
     if (od_color_direct_geometry(d->color_scheme, d->pixel_width, d->pixel_height,
                                  &out->geometry) != OD_COLOR_OK) {
@@ -128,19 +168,9 @@ bool od_xfer_app_panel_info(od_xfer_panel_info_t *out)
     return true;
 }
 
-/* Power the panel up and initialise it for the configured model. Shared by od_xfer's full-image
- * start and the boot screen, so both go through the same model check. */
-static bool panel_start(const od_color_geometry_t *geometry)
+static void configure_panel_pins(const struct DisplayConfig *d, const struct od_config *cfg)
 {
-    const struct DisplayConfig *d = display_cfg();
-    const struct od_config *cfg = od_tlsr_config();
     struct epd_io_pins pins;
-    epd_model_t *epd;
-
-    if (d == NULL || geometry == NULL || geometry->total_bytes == 0u ||
-        geometry->layout == OD_COLOR_LAYOUT_SPLIT_HALVES || !panel_type_known(d->panel_ic_type)) {
-        return false;
-    }
     pins.mosi = d->data_pin;
     pins.sclk = d->clk_pin;
     pins.cs   = d->cs_pin;
@@ -152,8 +182,59 @@ static bool panel_start(const od_color_geometry_t *geometry)
     /* cs_pin_2 was a reserved (zero) byte before protocol 1.4, and 0 is PA0: read it only for a
      * model that has a second controller. */
     pins.cs2  = panel_dual_cs(d->panel_ic_type) ? d->cs_pin_2 : TLSR_PORT_PIN_NONE;
-    tlsr_port_stay_awake(TLSR_PORT_AWAKE_PANEL, true);    /* released by panel_down() */
     epd_io_configure(&pins);
+}
+
+bool od_tlsr_panel_read_temperature(void)
+{
+    const struct DisplayConfig *d = display_cfg();
+    int16_t centi_c;
+    bool result;
+    if (s_xfer.active || hanshow_qn_active() || !hanshow_config_valid(d)) return false;
+    configure_panel_pins(d, od_tlsr_config());
+    tlsr_port_stay_awake(TLSR_PORT_AWAKE_PANEL, true);
+    s_panel_link_tag = od_tlsr_link_tag();
+    result = hanshow_qn_read_temperature(d->panel_ic_type, &centi_c,
+                                       tlsr_port_connected() ? panel_link_alive : panel_boot_idle);
+    if (result) od_tlsr_set_temperature((int8_t)(centi_c / 100));
+    tlsr_port_stay_awake(TLSR_PORT_AWAKE_PANEL, false);
+    return result;
+}
+
+/* Full-image and boot output share model admission and initialization. */
+static bool panel_start(const od_color_geometry_t *geometry)
+{
+    const struct DisplayConfig *d = display_cfg();
+    epd_model_t *epd;
+
+    if (d == NULL || geometry == NULL || geometry->total_bytes == 0u ||
+        geometry->layout == OD_COLOR_LAYOUT_SPLIT_HALVES || !panel_type_known(d->panel_ic_type)) {
+        return false;
+    }
+    if (hanshow_panel(d->panel_ic_type)) {
+        if (!hanshow_config_valid(d) || geometry->layout != OD_COLOR_LAYOUT_REFRESH_PASSES ||
+            geometry->total_bytes != hanshow_qn_wire_size(d->panel_ic_type) ||
+            !hanshow_qn_available(d->panel_ic_type)) return false;
+        (void)od_tlsr_panel_read_temperature();
+    } else if (geometry->layout == OD_COLOR_LAYOUT_REFRESH_PASSES) {
+        return false;
+    }
+    configure_panel_pins(d, od_tlsr_config());
+    tlsr_port_stay_awake(TLSR_PORT_AWAKE_PANEL, true);    /* released by panel_down() */
+    if (hanshow_panel(d->panel_ic_type)) {
+        memset(&s_xfer, 0, sizeof(s_xfer));
+        s_xfer.hanshow = true;
+        s_panel_link_tag = od_tlsr_link_tag();
+        if (!hanshow_qn_begin(d->panel_ic_type, tlsr_port_connected() ? panel_link_alive : panel_boot_idle)) {
+            panel_down();
+            return false;
+        }
+        s_xfer.active = true;
+        s_panel_activity_ms = od_hal_uptime_ms();
+        s_xfer.geometry = *geometry;
+        s_xfer.plane_size = geometry->part_bytes[0];
+        return true;
+    }
     EPD_GPIO_Init();
 
     epd = epd_init(model_for(d->panel_ic_type, d->color_scheme));
@@ -225,6 +306,14 @@ uint32_t od_xfer_app_write(uint32_t stream_offset, od_span_t data)
         data.n > s_xfer.geometry.total_bytes - stream_offset) {
         return 0u;
     }
+    if (s_xfer.hanshow) {
+        if (hanshow_qn_write(stream_offset, data)) {
+            s_panel_activity_ms = od_hal_uptime_ms();
+            return (uint32_t)data.n;
+        }
+        panel_down();
+        return 0u;
+    }
     while (consumed < data.n) {
         uint32_t logical = stream_offset + consumed;
         uint8_t plane = logical < s_xfer.plane_size ? 0u : 1u;
@@ -280,6 +369,11 @@ bool od_xfer_app_refresh(uint8_t mode, bool *completed)
     (void)mode;                        /* the imported drivers have one (full) refresh */
     if (completed == NULL || !s_xfer.active) {
         return false;
+    }
+    if (s_xfer.hanshow) {
+        *completed = hanshow_qn_finish();
+        panel_down();
+        return true;
     }
     s_xfer.epd->drv->refresh(s_xfer.epd);
     *completed = !epd_io_busy_timed_out();
@@ -346,11 +440,27 @@ int od_boot_app_begin_plane(int plane)
 
 int od_boot_app_write_row(uint16_t y, uint8_t segment, const uint8_t *row, uint16_t len)
 {
-    (void)y;
     if (!s_xfer.active || s_boot_plane < 0 || segment != 0u || row == NULL || len == 0u) {
         return boot_fail(0xE3);
     }
-    write_plane((uint8_t)s_boot_plane, row, len);
+    if (s_xfer.hanshow) {
+        const struct DisplayConfig *d = display_cfg();
+        uint16_t x;
+        uint8_t shift = s_boot_plane == OD_BOOT_PLANE_PRIMARY ? 2u : 0u;
+        if (d == NULL || len != d->pixel_width / 2u || y >= d->pixel_height) return boot_fail(0xE3);
+        /* Project four nibbles at a time without allocating another row buffer. */
+        for (x = 0u; x < d->pixel_width; x += 4u) {
+            uint8_t a = row[x / 2u], b = row[x / 2u + 1u];
+            uint8_t packed = (uint8_t)((((a >> (4u + shift)) & 3u) << 6) |
+                                       (((a >> shift) & 3u) << 4) |
+                                       (((b >> (4u + shift)) & 3u) << 2) | ((b >> shift) & 3u));
+            uint32_t off = (s_boot_plane == OD_BOOT_PLANE_SECOND ? s_xfer.plane_size : 0u) +
+                           (uint32_t)y * (d->pixel_width / 4u) + x / 4u;
+            if (od_xfer_app_write(off, od_span_make(&packed, 1u)) != 1u) return boot_fail(0xE3);
+        }
+    } else {
+        write_plane((uint8_t)s_boot_plane, row, len);
+    }
     tlsr_port_service_stack();
     return 0;
 }
@@ -370,6 +480,7 @@ int od_boot_app_end_frame(void)
 
 int od_boot_app_bits_per_pixel(uint8_t color_scheme)
 {
+    if (color_scheme == OD_COLOR_SCHEME_INDEXED16_2PASS) return 4;
     return color_scheme == OD_COLOR_SCHEME_BWRY ? 2 : 1;
 }
 

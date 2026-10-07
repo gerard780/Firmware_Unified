@@ -118,7 +118,7 @@ static bool ccm_mac(od_aes_block_fn enc, const uint8_t key[16], const uint8_t *n
             return false;
         }
         for (off = n; off < aad_len; off = (uint16_t)(off + n)) {
-            n = (uint8_t)((aad_len - off) < 16u ? (aad_len - off) : 16u);
+            n = (uint8_t)((unsigned)(aad_len - off) < 16u ? (unsigned)(aad_len - off) : 16u);
             xor16(x, aad + off, n);
             if (!enc(key, x, x)) {
                 return false;
@@ -126,7 +126,7 @@ static bool ccm_mac(od_aes_block_fn enc, const uint8_t key[16], const uint8_t *n
         }
     }
     for (off = 0; off < plain_len; off = (uint16_t)(off + n)) {
-        n = (uint8_t)((plain_len - off) < 16u ? (plain_len - off) : 16u);
+        n = (uint8_t)((unsigned)(plain_len - off) < 16u ? (unsigned)(plain_len - off) : 16u);
         xor16(x, plain + off, n);
         if (!enc(key, x, x)) {
             return false;
@@ -150,7 +150,7 @@ static bool ccm_ctr(od_aes_block_fn enc, const uint8_t key[16], const uint8_t *n
         if (!enc(key, a, s)) {
             return false;
         }
-        n = (uint8_t)((len - off) < 16u ? (len - off) : 16u);
+        n = (uint8_t)((unsigned)(len - off) < 16u ? (unsigned)(len - off) : 16u);
         for (i = 0; i < n; ++i) {
             out[off + i] = (uint8_t)(in[off + i] ^ s[i]);
         }

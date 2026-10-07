@@ -63,7 +63,11 @@ static uint8_t           s_dynamic[OD_ADVERT_DYNAMIC_LEN];
  * watchdog reset -- a crash must not replace the image a user put there. Buffers are sized for a
  * row of the widest supported panel and a version-6 QR code (211 bytes). */
 static bool              s_boot_pending;
-static uint8_t           s_boot_row[256];
+static bool              s_panel_temp_pending;
+#ifndef OD_TLSR_BOOT_ROW
+#define OD_TLSR_BOOT_ROW 256u
+#endif
+static uint8_t           s_boot_row[OD_TLSR_BOOT_ROW];
 static uint8_t           s_boot_qr[256];
 
 /* Battery: measured at boot and every BATTERY_PERIOD_MS on PowerOption.battery_sense_pin (0 mV =
@@ -124,6 +128,7 @@ void od_tlsr_config_reload(void)
     uint32_t len = OD_CONFIG_MAX_SIZE;
     struct od_config_report report;
 
+    s_panel_temp_pending = false;
     od_config_reset(&s_cfg);
     if (s_work.assembler.active || !od_tlsr_config_load(s_work.assembler.buffer, &len)) {
         return;
@@ -131,6 +136,9 @@ void od_tlsr_config_reload(void)
     (void)od_config_parse(&s_cfg, od_span_make(s_work.assembler.buffer, len), &report);
     epd_io_park_power(s_cfg.system_config.pwr_pin);
     epd_io_park_power(od_tlsr_panel_pwr2(&s_cfg));
+    s_panel_temp_pending = s_cfg.display_count != 0u &&
+        (s_cfg.displays[0].panel_ic_type == OD_PANEL_IC_HANSHOW_PRO154QN ||
+         s_cfg.displays[0].panel_ic_type == OD_PANEL_IC_HANSHOW_PRO266QN);
 }
 
 /* ------------------------------------------------------------------------ advertising --- */
@@ -320,12 +328,22 @@ void od_tlsr_poll(void)
 
     (void)od_hal_uptime_ms();          /* keep the tick extension ahead of its 268 s wrap */
 
+    od_tlsr_panel_poll();
+
     battery_poll();
     od_led_tlsr_poll();
 
     if (s_boot_pending && !tlsr_port_connected()) {
         s_boot_pending = false;
+        s_panel_temp_pending = false;    /* The image path samples before initialization. */
         boot_screen();
+    }
+
+    /* Populate normal temperature telemetry even when the boot image is suppressed.
+     * Probe only while disconnected; subsequent image starts refresh the reading. */
+    if (s_panel_temp_pending && !tlsr_port_connected()) {
+        s_panel_temp_pending = false;
+        (void)od_tlsr_panel_read_temperature();
     }
 
     if (s_close_pending) {

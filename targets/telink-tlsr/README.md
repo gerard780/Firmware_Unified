@@ -23,6 +23,23 @@ scan Telink's tree): Telink's [`tc_ble_single_sdk`](https://github.com/telink-se
 (`macos` / `linux` branch). The macOS toolchain is an x86-64 binary and runs under Rosetta on Apple
 Silicon.
 
+For the two Q-N specimens, use the constrained profile and a private waveform
+provider described in [Native Hanshow Q-N profiles](../../docs/hanshow-qn.md):
+
+```bash
+targets/telink-tlsr/build.sh -DOD_TLSR_SRAM_KIB=32 \
+  -DOD_HANSHOW_WAVEFORM_SOURCE=/private/owner/hanshow_waveforms.c
+```
+
+The default remains 64 KiB for existing boards. The 32 KiB profile generates SDK
+startup vectors with a 32 KiB stack top, uses four RX/TX link-layer FIFO entries,
+three application RX slots (two usable), a 1,536-byte configuration ceiling,
+64-byte inflate scratch, and a 128-byte boot row. Oversized configurations are
+NACKed at START. No image framebuffer is added. The linker and post-build audit
+require 3 KiB of stack space plus at least 512 bytes of reserve and reject images
+larger than a 192 KiB OTA bank. `memory.json` records address occupancy, including
+RAM-resident code and alignment gaps; stack high-water still requires hardware.
+
 The post-build step fails the build unless the `.bin` has `KNLT` at offset 8 and its length at
 offset 24, which is what both Telink OTA and ATC's `sendFw()` check before accepting an image.
 
@@ -45,7 +62,7 @@ offset 24, which is what both Telink OTA and ATC's `sendFw()` check before accep
 | LED (`0x0073` / `0x0074`) | shared pattern runner (`od_led.c`) through `od_led_tlsr.c`; LED pins are outputs only while a pattern runs, and PA7 (blue on ATC boards, also SWS) goes back to SWS after every run. A short green blink at boot. ATC boards' LEDs are active-low: `led_flags` 0x7 |
 | Buzzer, power-off, deep sleep | NACKed |
 | Battery voltage | SAR ADC on `power_option.battery_sense_pin` (PB0-7, PC4, PC5; ATC tags use PB3), Telink's drive-high-and-measure method: once after the config loads, then every 60 s while idle and disconnected; the advert is republished when the 10 mV value changes |
-| Temperature | the panel controller's own sensor, read at the start of every refresh (SSD16xx: temperature-sensor read after a `0xB1` load update; UC81xx: TSC); readings outside -30..70 C or exactly 0 are discarded. The TLSR825x has no usable die sensor |
+| Temperature | the panel controller's sensor, read at image startup; Q-N also probes at disconnected startup when boot graphics are suppressed. Q-N requires recognized revision readback and a fresh bounded conversion, admitting −25..50 C including zero; other drivers discard readings outside -30..70 C or exactly zero. Normal telemetry caches whole degrees; no calibrated ambient temperature or automatic waveform selection is implied. The TLSR825x has no calibrated die sensor here |
 | Watchdog | 4 s, fed from the main loop and while the stack is serviced |
 | Logging | not wired |
 | Power | suspend between radio events; no deep-retention sleep (shared/ state is not in retention RAM) |
@@ -81,6 +98,14 @@ The config's `pixel_width`/`pixel_height` and `color_scheme` must match that mod
 the table fixes the controller's RAM layout, so a mismatch is refused at transfer start rather
 than streamed into the wrong layout. Schemes: MONO for BW models, BWR or BWY for the two-plane
 models, BWRY for the JD796xx ones.
+
+Native Q-N profiles are canonical panel 1035 (Pro-154Q-N C3HW2, 200×200) and
+1036 (Pro-266Q-N E3LW2, 152×296), with mode 10 `INDEXED16_2PASS`. They use the
+existing direct transfer, compression, configuration, and boot-rendering hooks.
+A build without an owner-provisioned waveform pair refuses their uploads before
+moving GPIO. Native configuration requires rotation 0; host ordering is transposed
+for 1035 and reversed rows for 1036. Scoped hardware checks and remaining palette
+qualification are recorded in the [hardware checklist](../../docs/HARDWARE_VERIFICATION_CHECKLIST.md).
 
 Hanshow glass found on ATC tags, all provisional numbers until opendisplay-protocol assigns them:
 
@@ -185,7 +210,7 @@ tc32-elf-gcc is GCC 4.5.1.
 
 - Confirm the busy-line polarity and SPI timing on a real panel; the host test cannot.
 - Confirm the target chip: the startup code is `MCU_STARTUP_8258`. TLSR8359 tags need their SRAM
-  size and flash map checked against `boot.link` (the image currently uses ~33 KB of RAM).
+  size and flash map checked against `boot.link` (use the generated `memory.json` address-occupancy report).
 - ATC's firmware writes its tag type at `0x79000`; that block is left untouched so a tag can go
   back. Reading it to seed a first OD config (panel, pins) is the obvious next step.
 - UART recovery path for a tag that boots OD and then misbehaves (ATC's web flasher works over

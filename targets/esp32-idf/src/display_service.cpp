@@ -1631,7 +1631,7 @@ static bool directWriteTouchSuspended = false;
  * excluded: this adapter does not define an eight-gray wire format. */
 static od_color_status_t directWriteResolveGeometry(od_color_geometry_t* geometry) {
     const struct DisplayConfig& d = globalConfig.displays[0];
-    if (d.color_scheme == OD_COLOR_SCHEME_GRAY8) {
+    if (d.color_scheme == OD_COLOR_SCHEME_GRAY8 || d.color_scheme == OD_COLOR_SCHEME_INDEXED16_2PASS) {
         memset(geometry, 0, sizeof(*geometry));
         return OD_COLOR_UNSUPPORTED;
     }

@@ -12,12 +12,15 @@
 #include "od_xfer_app.h"
 
 #include "EPD_driver.h"
+#include "hanshow_qn.h"
 #include "od_check.h"
 #include "od_boot_screen.h"
+#include "od_boot_app.h"
 #include "od_config.h"
 #include "od_tlsr.h"
 #include "od_txq.h"
 #include "od_zlib_inflate.h"
+#include "od_zlib_pump.h"
 #include "epd_port.h"
 #include "tlsr_port.h"
 
@@ -37,23 +40,46 @@ static uint8_t  s_shift, s_bits;
 static bool     s_busy_idle_level;     /* level the busy line reads when the panel is idle */
 static bool     s_busy_stuck;          /* never go idle: exercises the timeout path */
 static int      s_pwr_at_first_byte;   /* P_PWR level when the first SPI byte completed, -1 = none */
+static uint64_t s_clock_us;
+static uint32_t s_services;
+static uint32_t s_tag;
+static bool s_connected;
+static bool s_disconnect_on_refresh;
+static bool s_connect_on_refresh;
+static uint32_t s_refresh_hold_ms;
+static uint32_t s_busy_until_ms;
 static bool     s_pwr_driven;          /* P_PWR is an output (not released to float) */
+static bool s_mosi_input;
+static bool s_qn_sensor;
+static uint8_t s_qn_revision[3], s_qn_temperature[2];
+static const uint8_t *s_sensor_read;
+static size_t s_sensor_read_bytes, s_sensor_read_bit;
+static bool s_conversion_issued, s_conversion_never_assert, s_conversion_stuck;
+static bool s_disconnect_on_conversion;
+static uint32_t s_conversion_start_ms, s_conversion_delay_ms, s_conversion_hold_ms;
 
 void tlsr_port_gpio_output(uint8_t pin, bool level)
 {
     if (pin == P_PWR) s_pwr_driven = true;
+    if (pin == P_MOSI) s_mosi_input = false;
     tlsr_port_gpio_write(pin, level);
 }
-void tlsr_port_gpio_input(uint8_t pin, uint8_t pull) { (void)pull; if (pin == P_PWR) s_pwr_driven = false; }
+void tlsr_port_gpio_input(uint8_t pin, uint8_t pull)
+{
+    (void)pull;
+    if (pin == P_PWR) s_pwr_driven = false;
+    if (pin == P_MOSI) s_mosi_input = true;
+}
 void tlsr_port_gpio_release(uint8_t pin) { if (pin == P_PWR) s_pwr_driven = false; }
 
 void tlsr_port_gpio_write(uint8_t pin, bool level)
 {
     if (pin >= 32u) return;
+    if (pin == P_RST && !level) s_conversion_issued = false;
     if ((pin == P_CS || pin == P_CS2) && level && s_bits != 0u) {
         s_bits = 0u;                               /* partial byte discarded at CS high */
     }
-    if (pin == P_SCLK && level && !s_level[P_SCLK] && (!s_level[P_CS] || !s_level[P_CS2])) {
+    if (pin == P_SCLK && level && !s_level[P_SCLK] && !s_mosi_input && (!s_level[P_CS] || !s_level[P_CS2])) {
         s_shift = (uint8_t)((s_shift << 1) | (s_level[P_MOSI] ? 1u : 0u));
         if (++s_bits == 8u) {
             if (s_log_n == 0u) s_pwr_at_first_byte = s_level[P_PWR];
@@ -62,6 +88,21 @@ void tlsr_port_gpio_write(uint8_t pin, bool level)
                 s_log[s_log_n].b = s_shift;
                 s_log[s_log_n].cs = (uint8_t)((s_level[P_CS] ? 0u : 1u) | (s_level[P_CS2] ? 0u : 2u));
                 s_log_n++;
+                if (s_qn_sensor && s_level[P_DC] == 0u && (s_shift == 0x70u || s_shift == 0x40u)) {
+                    s_sensor_read = s_shift == 0x70u ? s_qn_revision : s_qn_temperature;
+                    s_sensor_read_bytes = s_shift == 0x70u ? sizeof(s_qn_revision) : sizeof(s_qn_temperature);
+                    s_sensor_read_bit = 0u;
+                    if (s_shift == 0x40u) {
+                        s_conversion_issued = true;
+                        s_conversion_start_ms = (uint32_t)(s_clock_us / 1000u);
+                        if (s_disconnect_on_conversion) { s_connected = false; ++s_tag; }
+                    }
+                }
+                if (s_level[P_DC] == 0u && s_shift == 0x12u) {
+                    s_busy_until_ms = (uint32_t)(s_clock_us / 1000u) + s_refresh_hold_ms;
+                    if (s_disconnect_on_refresh) { s_connected = false; ++s_tag; }
+                    if (s_connect_on_refresh) { s_connected = true; ++s_tag; }
+                }
             }
             s_bits = 0u;
         }
@@ -88,14 +129,30 @@ static uint8_t s_read_bit;
 
 bool tlsr_port_gpio_read(uint8_t pin)
 {
+    if (pin == P_BUSY && s_conversion_issued && !s_conversion_never_assert) {
+        uint32_t elapsed = (uint32_t)(s_clock_us / 1000u) - s_conversion_start_ms;
+        if (elapsed >= s_conversion_delay_ms &&
+            (s_conversion_stuck || elapsed < s_conversion_delay_ms + s_conversion_hold_ms)) return false;
+    }
+    if (pin == P_BUSY && (uint32_t)(s_clock_us / 1000u) < s_busy_until_ms) return !s_busy_idle_level;
     if (pin == P_BUSY) return s_busy_stuck ? !s_busy_idle_level : s_busy_idle_level;
-    if (pin == P_MOSI) return ((s_temp_byte >> (7u - (s_read_bit++ & 7u))) & 1u) != 0u;
+    if (pin == P_MOSI) {
+        if (s_qn_sensor && s_sensor_read != NULL) {
+            size_t bit = s_sensor_read_bit++;
+            return bit / 8u < s_sensor_read_bytes &&
+                   ((s_sensor_read[bit / 8u] >> (7u - bit % 8u)) & 1u) != 0u;
+        }
+        return ((s_temp_byte >> (7u - (s_read_bit++ & 7u))) & 1u) != 0u;
+    }
     return false;
 }
 
-void tlsr_port_delay_us(uint32_t us) { (void)us; }
+void tlsr_port_delay_us(uint32_t us) { s_clock_us += us; }
 void tlsr_port_mac(uint8_t out[6]) { static const uint8_t m[6] = {0x92, 0xa9, 0x80, 1, 2, 3}; memcpy(out, m, 6); }
-void tlsr_port_service_stack(void) { }
+void tlsr_port_service_stack(void) { ++s_services; }
+bool tlsr_port_connected(void) { return s_connected; }
+uint32_t od_tlsr_link_tag(void) { return s_tag; }
+void od_core_reset(void) { od_xfer_app_abort(OD_XFER_ABORT_RESET); }
 static int s_awake_depth;              /* the panel's hold must always be released */
 void tlsr_port_stay_awake(uint8_t holder, bool on)
 {
@@ -110,20 +167,12 @@ void od_tlsr_set_temperature(int8_t c) { s_temp_reported = c; }
 float od_tlsr_battery_volts(void) { return -1.0f; }
 float od_tlsr_temperature_c(void) { return -1000.0f; }
 const struct od_config *od_tlsr_config(void) { return &s_cfg; }
-uint32_t od_hal_uptime_ms(void) { return 0u; }
+uint32_t od_hal_uptime_ms(void) { return (uint32_t)(s_clock_us / 1000u); }
 od_txq_status_t od_txq_flush(uint32_t now_ms, uint32_t deadline_ms)
 {
     (void)now_ms; (void)deadline_ms;
     return OD_TXQ_OK;
 }
-void od_zlib_stream_reset(uint32_t n) { (void)n; }
-od_zlib_status_t od_zlib_stream_push(const uint8_t *in, size_t len, bool final)
-{ (void)in; (void)len; (void)final; return (od_zlib_status_t)0; }
-od_zlib_status_t od_zlib_stream_poll(uint8_t *out, size_t cap, size_t *produced)
-{ (void)out; (void)cap; (void)produced; return (od_zlib_status_t)0; }
-const char *od_zlib_stream_error(void) { return ""; }
-uint32_t od_zlib_stream_output_count(void) { return 0u; }
-
 /* ----------------------------------------------------------------------------- helpers --- */
 
 static void set_panel(uint16_t ic, uint16_t w, uint16_t h, uint8_t scheme)
@@ -147,8 +196,16 @@ static void set_panel(uint16_t ic, uint16_t w, uint16_t h, uint8_t scheme)
     s_log_n = 0u;
     s_bits = 0u;
     s_busy_stuck = false;
+    s_clock_us = 0u; s_services = 0u; s_busy_until_ms = 0u;
+    s_refresh_hold_ms = 0u; s_disconnect_on_refresh = false; s_connect_on_refresh = false; s_connected = false;
     s_pwr_at_first_byte = -1;
     s_pwr_driven = false;
+    s_mosi_input = false;
+    s_qn_sensor = false; s_sensor_read = NULL;
+    s_conversion_issued = false; s_conversion_never_assert = false; s_conversion_stuck = false;
+    s_disconnect_on_conversion = false;
+    s_conversion_delay_ms = 2u; s_conversion_hold_ms = 3u;
+    s_temp_reported = -128;
 }
 
 /* Index of the n-th (0-based) command byte `cmd` in the log, or -1. */
@@ -509,13 +566,414 @@ static void test_boot_screen(void)
     CHECK(find_cmd(SSD16xx_WRITE_RAM1, 0u) < 0);
 }
 
+/* Synthetic waveforms exercise register/data boundaries, not optical performance. */
+static const uint8_t s_wave1[HANSHOW_QN_WAVE_BYTES] = {1, 2, 3, 4, 5, 6, 7};
+static const uint8_t s_wave2[HANSHOW_QN_WAVE_BYTES] = {11, 12, 13, 14, 15, 16, 17};
+static bool s_waves_available;
+static bool s_new_family;
+static const struct hanshow_qn_initializer s_qn_init[2] = {
+    {{31, 32, 33, 34, 35, 36, 37}, {41, 42}, {51, 52, 53, 54}},
+    {{61, 62, 63, 64, 65, 66, 67}, {71, 72}, {81, 82, 83, 84}}
+};
+static struct hanshow_qn_waveforms s_qn_new = {
+    .panel_id = 1036, .band = 5, .min_centi = 2001, .max_centi = 2500,
+    .pass = {s_wave1, s_wave2}, .family = HANSHOW_QN_FAMILY_0ENSPQ1YQ,
+    .initializer = {&s_qn_init[0], &s_qn_init[1]}
+};
+const struct hanshow_qn_waveforms *hanshow_qn_waveforms_for(uint16_t panel)
+{
+    static const struct hanshow_qn_waveforms small = {
+        .panel_id = 1035, .band = 7, .min_centi = 2501, .max_centi = 3000,
+        .pass = {s_wave1, s_wave2}
+    };
+    static const struct hanshow_qn_waveforms large = {
+        .panel_id = 1036, .band = 6, .min_centi = 2001, .max_centi = 2500,
+        .pass = {s_wave1, s_wave2}
+    };
+    if (!s_waves_available) return NULL;
+    if (s_new_family) return &s_qn_new;
+    return panel == 1035u ? &small : panel == 1036u ? &large : NULL;
+}
+
+static bool qn_inflate_sink(void *context, od_mut_span_t bytes)
+{
+    uint32_t *offset = context;
+    if (od_xfer_app_write(*offset, od_mut_span_const(bytes)) != bytes.n) return false;
+    *offset += (uint32_t)bytes.n;
+    return true;
+}
+
+static uint8_t asymmetric_drive_code(uint16_t x, uint16_t y)
+{
+    return (uint8_t)((3u * x + 5u * y + x / 7u) & 15u);
+}
+
+static void test_hanshow_boot_component_projection(void)
+{
+    uint8_t row[128];
+    CASE("Q-N boot hooks preserve physical asymmetric pixels across both component streams");
+    for (unsigned panel = 0u; panel < 2u; ++panel) {
+        uint16_t width = panel == 0u ? 200u : 152u;
+        uint16_t height = panel == 0u ? 200u : 296u;
+        uint32_t component_bytes = (uint32_t)width * height / 4u;
+        set_panel(panel == 0u ? 1035u : 1036u, width, height, OD_COLOR_SCHEME_INDEXED16_2PASS);
+        s_busy_idle_level = true;
+        s_waves_available = true;
+        CHECK(od_boot_app_begin_frame(width, height, 1u) == 0);
+        for (unsigned pass = 0u; pass < 2u; ++pass) {
+            CHECK(od_boot_app_begin_plane(pass == 0u ? OD_BOOT_PLANE_PRIMARY : OD_BOOT_PLANE_SECOND) == 0);
+            for (uint16_t line = 0u; line < height; ++line) {
+                memset(row, 0, sizeof(row));
+                for (uint16_t pos = 0u; pos < width; ++pos) {
+                    uint16_t physical_x = panel == 0u ? line : pos;
+                    uint16_t physical_y = panel == 0u ? pos : (uint16_t)(height - 1u - line);
+                    row[pos / 2u] |= (uint8_t)(asymmetric_drive_code(physical_x, physical_y) <<
+                                              (pos % 2u == 0u ? 4u : 0u));
+                }
+                CHECK(od_boot_app_write_row(line, 0u, row, width / 2u) == 0);
+            }
+            CHECK(od_boot_app_end_plane(pass == 0u ? OD_BOOT_PLANE_PRIMARY : OD_BOOT_PLANE_SECOND) == 0);
+        }
+        CHECK(od_boot_app_end_frame() == 0 && s_awake_depth == 0);
+        CHECK(data_after(find_cmd(0x10u, 0u), NULL, s_got, sizeof(s_got)) == component_bytes);
+        CHECK(data_after(find_cmd(0x10u, 1u), NULL, s_img, sizeof(s_img)) == component_bytes);
+        for (uint16_t y = 0u; y < height; ++y) {
+            for (uint16_t x = 0u; x < width; ++x) {
+                uint32_t pixel = panel == 0u ? (uint32_t)x * height + y :
+                                 (uint32_t)(height - 1u - y) * width + x;
+                uint8_t shift = (uint8_t)(6u - 2u * (pixel % 4u));
+                uint8_t code = (uint8_t)((((s_got[pixel / 4u] >> shift) & 3u) << 2) |
+                                       ((s_img[pixel / 4u] >> shift) & 3u));
+                CHECK(code == asymmetric_drive_code(x, y));
+            }
+        }
+    }
+    s_waves_available = false;
+}
+
+static void sensor_setup(uint16_t panel, uint8_t revision, uint8_t whole, uint8_t fraction)
+{
+    struct epd_io_pins pins = {P_MOSI, P_SCLK, P_CS, P_DC, P_RST, P_BUSY, P_PWR, 0xff, 0xff};
+    set_panel(panel, panel == 1035u ? 200u : 152u, panel == 1035u ? 200u : 296u,
+              OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_cfg.system_config.pwr_pin = P_PWR;
+    s_busy_idle_level = true;
+    s_qn_sensor = true;
+    s_qn_revision[0] = revision; s_qn_revision[1] = 2u; s_qn_revision[2] = 1u;
+    s_qn_temperature[0] = whole; s_qn_temperature[1] = fraction;
+    epd_io_configure(&pins);
+}
+
+static bool sensor_keep_connected(void) { return s_connected; }
+
+static void test_hanshow_qn_temperature(void)
+{
+    int16_t centi_c;
+    unsigned i;
+    const uint8_t revision[] = {0x08u, 0x03u, 0x83u};
+    CASE("Q-N standalone temperature validates revision and fresh BUSY without high voltage");
+    for (i = 0u; i < sizeof(revision); ++i) {
+        sensor_setup(i == 0u ? 1035u : 1036u, revision[i], 26u, 0x80u);
+        CHECK(hanshow_qn_read_temperature(i == 0u ? 1035u : 1036u, &centi_c, NULL));
+        CHECK(centi_c == 2650 && s_services > 0u && s_clock_us >= 160000u);
+        CHECK(find_cmd(0x70u, 0u) >= 0 && find_cmd(0x40u, 0u) > find_cmd(0x70u, 0u));
+        CHECK(find_cmd(0x04u, 0u) < 0 && find_cmd(0x12u, 0u) < 0 && find_cmd(0x20u, 0u) < 0);
+        CHECK(find_cmd(0x10u, 0u) < 0 && !hanshow_qn_active());
+        CHECK(s_pwr_driven && s_level[P_PWR] == 1u && s_pwr_at_first_byte == 0);
+    }
+    CASE("Q-N sensor signed quarter degrees and inclusive range preserve raw fractional bits");
+    {
+        const uint8_t whole[] = {0xe7u, 0xffu, 0u, 50u};
+        const uint8_t fractional[] = {0u, 0xc7u, 0u, 0x3fu};
+        const int16_t expected[] = {-2500, -25, 0, 5000};
+        for (i = 0u; i < sizeof(whole); ++i) {
+            sensor_setup(1035u, 8u, whole[i], fractional[i]);
+            CHECK(hanshow_qn_read_temperature(1035u, &centi_c, NULL) && centi_c == expected[i]);
+        }
+    }
+    CASE("Q-N sensor refuses malformed revision and implausible temperature without changing output");
+    for (i = 0u; i < 7u; ++i) {
+        sensor_setup(1035u, 8u, 24u, 0u);
+        if (i == 0u) s_qn_revision[0] = 3u;
+        if (i == 1u) memset(s_qn_revision, 0xff, sizeof(s_qn_revision));
+        if (i == 2u) memset(s_qn_revision, 0, sizeof(s_qn_revision));
+        if (i == 3u) s_qn_revision[2] = 2u;
+        if (i == 4u) s_qn_temperature[0] = 0xe6u;
+        if (i == 5u) s_qn_temperature[0] = 51u;
+        if (i == 6u) { s_qn_temperature[0] = 50u; s_qn_temperature[1] = 0x40u; }
+        centi_c = 12345;
+        CHECK(!hanshow_qn_read_temperature(1035u, &centi_c, NULL) && centi_c == 12345);
+        CHECK(!hanshow_qn_active() && s_level[P_PWR] == 1u);
+        if (i < 4u) CHECK(find_cmd(0x40u, 0u) < 0);
+    }
+    CASE("Q-N sensor requires BUSY assertion and completion within its bounded deadline");
+    for (i = 0u; i < 3u; ++i) {
+        sensor_setup(1035u, 8u, 24u, 0u);
+        if (i == 0u) s_conversion_never_assert = true;
+        if (i == 1u) s_conversion_stuck = true;
+        if (i == 2u) s_busy_stuck = true;
+        centi_c = 12345;
+        CHECK(!hanshow_qn_read_temperature(1035u, &centi_c, NULL) && centi_c == 12345);
+        CHECK(s_clock_us < 600000u && s_services >= 400u && !hanshow_qn_active());
+        CHECK(s_level[P_PWR] == 1u);
+    }
+    CASE("Q-N standalone wrapper updates ordinary telemetry and preserves it on failed probe");
+    sensor_setup(1035u, 8u, 26u, 0x80u);
+    CHECK(od_tlsr_panel_read_temperature() && s_temp_reported == 26 && s_awake_depth == 0);
+    s_qn_revision[0] = 3u;
+    CHECK(!od_tlsr_panel_read_temperature() && s_temp_reported == 26 && s_awake_depth == 0);
+    CASE("Q-N sensor cancellation during reset or conversion releases every panel resource");
+    sensor_setup(1035u, 8u, 24u, 0u);
+    centi_c = 12345;
+    CHECK(!hanshow_qn_read_temperature(1035u, &centi_c, sensor_keep_connected));
+    CHECK(s_log_n == 0u && centi_c == 12345 && !hanshow_qn_active());
+    sensor_setup(1035u, 8u, 24u, 0u);
+    s_connected = true; s_disconnect_on_conversion = true;
+    CHECK(!od_tlsr_panel_read_temperature() && s_temp_reported == -128);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0 && s_level[P_PWR] == 1u);
+    CASE("Q-N sensor unknown panel or null output refuses before GPIO access");
+    sensor_setup(1035u, 8u, 24u, 0u);
+    CHECK(!hanshow_qn_read_temperature(1034u, &centi_c, NULL));
+    CHECK(!hanshow_qn_read_temperature(1035u, NULL, NULL));
+    CHECK(s_log_n == 0u && !s_pwr_driven);
+    CASE("Q-N image startup probes telemetry and refuses sensor reentry during streaming");
+    sensor_setup(1035u, 8u, 24u, 0xc0u);
+    s_waves_available = true;
+    CHECK(begin() && s_temp_reported == 24 && hanshow_qn_active() && s_awake_depth == 1);
+    {
+        uint32_t logged = s_log_n;
+        centi_c = 12345;
+        CHECK(!od_tlsr_panel_read_temperature());
+        CHECK(!hanshow_qn_read_temperature(1035u, &centi_c, NULL) && centi_c == 12345);
+        CHECK(s_log_n == logged && hanshow_qn_active() && s_awake_depth == 1);
+    }
+    od_xfer_app_abort(OD_XFER_ABORT_RESET);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0 && s_level[P_PWR] == 1u);
+    CASE("Q-N invalid sensor response does not block a separately admitted image");
+    sensor_setup(1035u, 3u, 24u, 0u);
+    CHECK(begin() && s_temp_reported == -128);
+    od_xfer_app_abort(OD_XFER_ABORT_RESET);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+    s_waves_available = false;
+}
+
+static void test_hanshow_qn(void)
+{
+    uint16_t ids[] = {1035, 1036};
+    unsigned i;
+    bool completed;
+    for (i = 0; i < 2u; ++i) {
+        uint16_t w = i == 0u ? 200u : 152u, h = i == 0u ? 200u : 296u;
+        uint32_t total = hanshow_qn_wire_size(ids[i]), part = total / 2u;
+        long ram1, ram2, lut1, lut2;
+        CASE("Q-N streams two components across an arbitrary chunk boundary");
+        set_panel(ids[i], w, h, OD_COLOR_SCHEME_INDEXED16_2PASS);
+        s_cfg.system_config.pwr_pin = P_PWR;
+        s_busy_idle_level = true;
+        s_waves_available = true;
+        fill(total, 29u + i);
+        CHECK(begin());
+        CHECK(stream(total, 230u));
+        ram1 = find_cmd(0x10, 0u); ram2 = find_cmd(0x10, 1u);
+        CHECK(ram1 >= 0 && ram2 > ram1);
+        CHECK(find_cmd(0x12, 0u) > ram1 && find_cmd(0x12, 0u) < ram2);
+        CHECK(find_cmd(0x12, 1u) < 0); /* only END triggers the second refresh */
+        CHECK(data_after(ram1, NULL, s_got, sizeof(s_got)) == part);
+        CHECK(memcmp(s_img, s_got, part) == 0);
+        CHECK(data_after(ram2, NULL, s_got, sizeof(s_got)) == part);
+        CHECK(memcmp(s_img + part, s_got, part) == 0);
+        lut1 = find_cmd(0x20, 0u); lut2 = find_cmd(0x20, 1u);
+        CHECK(data_after(lut1, NULL, s_got, sizeof(s_got)) == HANSHOW_QN_WAVE_BYTES);
+        CHECK(memcmp(s_got, s_wave1, HANSHOW_QN_WAVE_BYTES) == 0);
+        CHECK(data_after(lut2, NULL, s_got, sizeof(s_got)) == HANSHOW_QN_WAVE_BYTES);
+        CHECK(memcmp(s_got, s_wave2, HANSHOW_QN_WAVE_BYTES) == 0);
+        CHECK((find_cmd(0x4d, 0u) >= 0) == (i == 1u));
+        CHECK(data_after(find_cmd(0xf0, 0u), NULL, s_got, sizeof(s_got)) == 1u && s_got[0] == (i == 0u ? 0x7du : 0x5fu));
+        CHECK(data_after(find_cmd(0xf0, 1u), NULL, s_got, sizeof(s_got)) == 1u && s_got[0] == (i == 0u ? 0x7du : 0x5fu));
+        for (unsigned pass = 0u; pass < 2u; ++pass) {
+            const uint8_t booster[] = {0x0fu, 0x0au, 0x2fu, 0x25u, 0x22u, i == 0u ? 0x2bu : 0x2eu, 0x21u};
+            const uint8_t dimensions[] = {0u, (uint8_t)w, (uint8_t)(h >> 8), (uint8_t)h};
+            CHECK(data_after(find_cmd(0x06, pass), NULL, s_got, sizeof(s_got)) == sizeof(booster));
+            CHECK(memcmp(s_got, booster, sizeof(booster)) == 0);
+            CHECK(data_after(find_cmd(0x61, pass), NULL, s_got, sizeof(s_got)) == sizeof(dimensions));
+            CHECK(memcmp(s_got, dimensions, sizeof(dimensions)) == 0);
+        }
+        CHECK(find_cmd(0x06, 2u) < 0 && find_cmd(0x60, 2u) < 0 && find_cmd(0x65, 2u) < 0);
+        CHECK(data_after(find_cmd(0x50, 1u), NULL, s_got, sizeof(s_got)) == 1u && s_got[0] == 0x37);
+        CHECK(od_xfer_app_refresh(0u, &completed) && completed);
+        CHECK(find_cmd(0x12, 1u) > ram2);
+        CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+        CHECK(s_pwr_driven && s_level[P_PWR] == 1u && s_services > 0u);
+    }
+    CASE("Q-N real inflate pump crosses the refresh boundary within 64-byte scratch");
+    {
+        static const uint8_t compressed[] = {0x18, 0xd3, 0xed, 0xc1, 0x31, 0x01, 0x00, 0x00, 0x00, 0xc2, 0xa0, 0x94, 0xeb, 0x5f, 0xc5, 0x1a, 0x1e, 0x40, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf0, 0x60, 0x13, 0xe0, 0xf2, 0x18};
+        uint8_t scratch[64];
+        uint32_t offset = 0u, j;
+        set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+        s_busy_idle_level = true;
+        CHECK(begin());
+        od_zlib_pump_reset(20000);
+        CHECK(od_zlib_pump_push(od_span_make(compressed, sizeof(compressed)), true,
+                               od_mut_span_make(scratch, sizeof(scratch)), qn_inflate_sink, &offset) == OD_ZLIB_PUMP_DONE);
+        CHECK(offset == 20000 && od_zlib_pump_output_count() == 20000);
+        CHECK(find_cmd(0x12, 0) >= 0 && find_cmd(0x12, 1) < 0);
+        for (j = 0; j < 2; ++j) {
+            uint32_t k;
+            CHECK(data_after(find_cmd(0x10, j), NULL, s_got, sizeof(s_got)) == 10000);
+            for (k = 0; k < 10000; ++k) if (s_got[k] != 0x55) break;
+            CHECK(k == 10000);
+        }
+        CHECK(od_xfer_app_refresh(0, &completed) && completed && s_awake_depth == 0);
+    }
+    CASE("Q-N missing waveforms refuse before pin activity");
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_waves_available = false;
+    CHECK(!begin() && s_log_n == 0 && s_awake_depth == 0);
+    s_waves_available = true;
+    CASE("Q-N invalid configuration refuses before pin activity");
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_BWR);
+    CHECK(!begin() && s_log_n == 0);
+    set_panel(1035, 152, 296, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    CHECK(!begin() && s_log_n == 0);
+    set_panel(1031, 152, 296, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    CHECK(!begin() && s_log_n == 0);
+
+    CASE("Q-N incomplete END and nonsequential writes abort safely");
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_busy_idle_level = true;
+    CHECK(begin());
+    CHECK(od_xfer_app_write(1, od_span_make(s_img, 4)) == 0);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+    CHECK(begin());
+    CHECK(od_xfer_app_refresh(0u, &completed) && !completed);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+
+    CASE("Q-N first refresh timeout and disconnect release panel resources");
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_busy_idle_level = true;
+    CHECK(begin());
+    s_refresh_hold_ms = 200001u;
+    CHECK(od_xfer_app_write(0u, od_span_make(s_img, 10000)) == 0);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+    CHECK(find_cmd(0x10, 1u) < 0 && s_services >= 200000u);
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_busy_idle_level = true; s_connected = true;
+    CHECK(begin());
+    s_disconnect_on_refresh = true;
+    CHECK(od_xfer_app_write(0u, od_span_make(s_img, 10000)) == 0);
+    CHECK(!hanshow_qn_active() && s_awake_depth == 0 && find_cmd(0x10, 1u) < 0);
+
+    CASE("Q-N idle timeout starts after the blocking first refresh");
+    set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_busy_idle_level = true;
+    CHECK(begin());
+    s_refresh_hold_ms = 150000;
+    CHECK(od_xfer_app_write(0, od_span_make(s_img, 10000)) == 10000);
+    od_tlsr_panel_poll(); CHECK(hanshow_qn_active());
+    s_clock_us += 30001000u;
+    od_tlsr_panel_poll(); CHECK(!hanshow_qn_active() && s_awake_depth == 0);
+
+    CASE("Q-N boot screen uses a bounded single row across two passes");
+    {
+        uint8_t row[128], qr[256];
+        struct od_boot_bufs bufs = {row, sizeof(row), qr, sizeof(qr)};
+        uint32_t x, seen = 0;
+        set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+        s_busy_idle_level = true;
+        CHECK(od_boot_screen_render(&s_cfg, NULL, &bufs));
+        CHECK(data_after(find_cmd(0x10, 0), NULL, s_got, sizeof(s_got)) == 10000);
+        CHECK(data_after(find_cmd(0x10, 1), NULL, s_img, sizeof(s_img)) == 10000);
+        for (x = 0; x < 40000; ++x) {
+            uint8_t shift = (uint8_t)(6u - 2u * (x % 4u));
+            unsigned code = (((s_got[x / 4u] >> shift) & 3u) << 2) | ((s_img[x / 4u] >> shift) & 3u);
+            seen |= 1u << code;
+        }
+        CHECK((seen & (1u << 4)) != 0 && (seen & (1u << 5)) != 0);
+        CHECK((seen & ~((1u << 4) | (1u << 5) | (1u << 9) | (1u << 13) | (1u << 1) | (1u << 6) | (1u << 7))) == 0);
+        CHECK(find_cmd(0x12, 1) >= 0 && s_awake_depth == 0);
+    }
+    CASE("Q-N boot yields to a newly connected client during refresh");
+    {
+        uint8_t row[128], qr[256];
+        struct od_boot_bufs bufs = {row, sizeof(row), qr, sizeof(qr)};
+        set_panel(1035, 200, 200, OD_COLOR_SCHEME_INDEXED16_2PASS);
+        s_busy_idle_level = true; s_connect_on_refresh = true;
+        CHECK(!od_boot_screen_render(&s_cfg, NULL, &bufs));
+        CHECK(!hanshow_qn_active() && s_awake_depth == 0 && find_cmd(0x10, 1u) < 0);
+    }
+    s_waves_available = false;
+}
+
+static void test_hanshow_qn_new_family(void)
+{
+    const uint8_t commands[] = {0x4d, 0xae, 0xb6, 0xba, 0x00, 0x01, 0x03, 0x06,
+                               0x30, 0x50, 0xf0, 0x60, 0x61, 0x65, 0x82, 0xe3,
+                               0xe7, 0xe9, 0x20, 0x10};
+    bool completed;
+    unsigned component;
+    uint32_t j;
+    CASE("Q-N explicit 404545 family preserves per-pass overrides and register order");
+    set_panel(1036, 152, 296, OD_COLOR_SCHEME_INDEXED16_2PASS);
+    s_busy_idle_level = true; s_waves_available = true; s_new_family = true;
+    fill(22496u, 43u);
+    CHECK(begin() && stream(22496u, 230u));
+    CHECK(od_xfer_app_refresh(0u, &completed) && completed && s_awake_depth == 0);
+    for (component = 0; component < 2u; ++component) {
+        long start = find_cmd(0x4d, component);
+        unsigned k = 0;
+        for (j = (uint32_t)start; j < s_log_n && k < sizeof(commands); ++j) {
+            if (s_log[j].dc == 0u) CHECK(s_log[j].b == commands[k++]);
+        }
+        CHECK(k == sizeof(commands));
+        CHECK(data_after(find_cmd(0x06, component), NULL, s_got, sizeof(s_got)) == 7u);
+        CHECK(memcmp(s_got, s_qn_init[component].booster, 7u) == 0);
+        CHECK(data_after(find_cmd(0x60, component), NULL, s_got, sizeof(s_got)) == 2u);
+        CHECK(memcmp(s_got, s_qn_init[component].timing, 2u) == 0);
+        CHECK(data_after(find_cmd(0x65, component), NULL, s_got, sizeof(s_got)) == 4u);
+        CHECK(memcmp(s_got, s_qn_init[component].gate_start, 4u) == 0);
+        CHECK(data_after(find_cmd(0x50, component), NULL, s_got, sizeof(s_got)) == 1u);
+        CHECK(s_got[0] == (component == 0u ? 0x37 : 0x97));
+        CHECK(data_after(find_cmd(0x01, component), NULL, s_got, sizeof(s_got)) == 6u);
+        CHECK(s_got[0] == 7 && memcmp(s_got + 1, component == 0 ? s_wave1 : s_wave2, 5u) == 0);
+        CHECK(data_after(find_cmd(0x30, component), NULL, s_got, sizeof(s_got)) == 1u);
+        CHECK(s_got[0] == (component == 0u ? 7 : 17));
+        CHECK(data_after(find_cmd(0x82, component), NULL, s_got, sizeof(s_got)) == 1u);
+        CHECK(s_got[0] == ((component == 0u ? 6u : 16u) ^ 0x80u));
+        CHECK(data_after(find_cmd(0x20, component), NULL, s_got, sizeof(s_got)) == HANSHOW_QN_WAVE_BYTES);
+        CHECK(memcmp(s_got, component == 0 ? s_wave1 : s_wave2, HANSHOW_QN_WAVE_BYTES) == 0);
+        CHECK(data_after(find_cmd(0x10, component), NULL, s_got, sizeof(s_got)) == 11248u);
+        CHECK(memcmp(s_got, s_img + component * 11248u, 11248u) == 0);
+        {
+            long shutdown = find_cmd(0x00, 2u * component + 1u);
+            CHECK(shutdown > find_cmd(0x12, component) && shutdown < find_cmd(0x02, component));
+            CHECK(data_after(shutdown, NULL, s_got, sizeof(s_got)) == 2u && s_got[0] == 0x27 && s_got[1] == 0xa9);
+        }
+    }
+    CHECK(find_cmd(0x06, 2u) < 0 && find_cmd(0x60, 2u) < 0 && find_cmd(0x65, 2u) < 0);
+
+    CASE("Q-N explicit family refuses missing overrides, wrong band, unknown family and 154");
+    for (j = 0; j < 5u; ++j) {
+        struct hanshow_qn_waveforms valid = s_qn_new;
+        set_panel(j == 4u ? 1035 : 1036, j == 4u ? 200 : 152, j == 4u ? 200 : 296,
+                  OD_COLOR_SCHEME_INDEXED16_2PASS);
+        if (j < 2u) s_qn_new.initializer[j] = NULL;
+        if (j == 2u) s_qn_new.band = 6;
+        if (j == 3u) s_qn_new.family = 255;
+        if (j == 4u) s_qn_new.panel_id = 1035;
+        CHECK(!begin() && s_log_n == 0 && s_awake_depth == 0);
+        s_qn_new = valid;
+    }
+    s_new_family = false; s_waves_available = false;
+}
+
 static void test_refusals(void)
 {
     od_xfer_panel_info_t info;
     bool completed = true;
 
     CASE("unknown panel type refused before any pin moves");
-    set_panel(1035u, 400u, 300u, OD_COLOR_SCHEME_BWR);
+    set_panel(1037u, 400u, 300u, OD_COLOR_SCHEME_BWR);
     CHECK(!od_xfer_app_panel_info(&info));
     CHECK(s_log_n == 0u);
 
@@ -563,6 +1021,10 @@ int main(void)
     test_hanshow_350_bwy();
     test_ti_970();
     test_boot_screen();
+    test_hanshow_qn_temperature();
+    test_hanshow_boot_component_projection();
+    test_hanshow_qn();
+    test_hanshow_qn_new_family();
     test_refusals();
     return OD_CHECK_REPORT_NONEMPTY("tlsr_display", 40u);
 }

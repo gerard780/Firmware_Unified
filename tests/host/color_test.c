@@ -98,6 +98,14 @@ static void fixed_vectors(void)
 {
   od_color_geometry_t g;
 
+  check_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 200u, 200u,
+                 OD_COLOR_LAYOUT_REFRESH_PASSES, 2u, 2u, OD_COLOR_PLANE_0, false, 200u, 200u);
+  CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 200u, 200u, &g) == OD_COLOR_OK);
+  CHECK(g.total_bytes == 20000u);
+  CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 152u, 296u, &g) == OD_COLOR_OK);
+  CHECK(g.total_bytes == 22496u);
+  CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 151u, 296u, &g) == OD_COLOR_BAD_GEOMETRY);
+
   CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_MONO, 122u, 250u, &g) == OD_COLOR_OK);
   CHECK(g.part_bytes[0] == 4000u && g.total_bytes == 4000u);
   CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_GRAY4, 122u, 250u, &g) == OD_COLOR_OK);
@@ -124,7 +132,7 @@ static void rejected_and_invalid(void)
     OD_COLOR_SCHEME_RGB565,
     OD_COLOR_SCHEME_RGB888,
     OD_COLOR_SCHEME_RGB16BPC,
-    10u,
+    11u,
     0xFFu,
   };
   od_color_geometry_t g;

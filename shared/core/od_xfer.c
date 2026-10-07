@@ -695,7 +695,8 @@ od_xfer_start_cause_t od_xfer_pipe_arm_full(const od_cmd_ctx_t *ctx, uint32_t to
     if (!od_xfer_app_panel_info(&panel) || panel.geometry.total_bytes == 0u) {
         return OD_XFER_START_PANEL_GEOMETRY;
     }
-    if (panel.geometry.layout == OD_COLOR_LAYOUT_SPLIT_HALVES) {
+    if (panel.geometry.layout == OD_COLOR_LAYOUT_SPLIT_HALVES ||
+        panel.geometry.layout == OD_COLOR_LAYOUT_REFRESH_PASSES) {
         return OD_XFER_START_SPLIT_LAYOUT;
     }
     if (total != panel.geometry.total_bytes) {

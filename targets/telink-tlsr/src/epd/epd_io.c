@@ -188,6 +188,11 @@ void EPD_FillRAM(uint8_t cmd, uint8_t value, uint32_t len) {
     }
 }
 
+void epd_io_reset_write(bool high)
+{
+    tlsr_port_gpio_write(s_pins.rst, high);
+}
+
 void EPD_Reset(bool status, uint16_t duration) {
     tlsr_port_gpio_write(s_pins.rst, status);
     delay(duration);

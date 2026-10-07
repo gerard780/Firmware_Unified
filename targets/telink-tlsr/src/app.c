@@ -11,8 +11,11 @@
 #include "app_att.h"
 #include "tlsr_port.h"
 
-#define RX_FIFO_NUM        8
-#define TX_FIFO_NUM        8
+#ifndef OD_TLSR_LL_FIFO_NUM
+#define OD_TLSR_LL_FIFO_NUM 8
+#endif
+#define RX_FIFO_NUM        OD_TLSR_LL_FIFO_NUM
+#define TX_FIFO_NUM        OD_TLSR_LL_FIFO_NUM
 
 /* The link layer references these by name; their size carries the 251-octet DLE setting. */
 u8        blt_rxfifo_b[RX_FIFO_SIZE * RX_FIFO_NUM] = {0};
@@ -63,15 +66,6 @@ static void build_identity(void)
     s_scan_rsp[10] = 3; s_scan_rsp[11] = DT_COMPLETE_LIST_16BIT_SERVICE_UUID;
     s_scan_rsp[12] = 0x46; s_scan_rsp[13] = 0x24;
     s_scan_rsp_len = 14;
-}
-
-/* The stack reboots into the new image right after a successful OTA. That reboot is deliberate:
- * clear the breadcrumb first, or the next boot reports it as a hang (and skips the boot screen). */
-static void ota_result(int result)
-{
-    if (result == OTA_SUCCESS) {
-        tlsr_port_crumb(0);
-    }
 }
 
 static void task_connect(u8 e, u8 *p, int n)
@@ -166,10 +160,6 @@ _attribute_no_inline_ void user_init_normal(void)
 #endif
     blc_smp_setSecurityLevel(No_Security);
 
-    blc_ota_initOtaServer_module();
-    blc_ota_setOtaProcessTimeout(300);
-    blc_ota_registerOtaResultIndicationCb(ota_result);
-
     build_identity();
     od_tlsr_init();                     /* loads config and publishes the first MSD via the port */
 
@@ -198,6 +188,10 @@ _attribute_no_inline_ void main_loop(void)
     tlsr_port_crumb(0x10);
     blt_sdk_main_loop();
     tlsr_port_crumb(0x11);
+
+    if (tlsr_port_reboot_poll()) {
+        return;
+    }
 
     /* Centrals usually start the data-length update; ask once if this one has not after 1 s. */
     if (s_connect_tick && !s_dle_requested && clock_time_exceed(s_connect_tick, 1000000)) {

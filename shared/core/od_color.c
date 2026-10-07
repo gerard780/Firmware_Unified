@@ -88,6 +88,16 @@ od_color_status_t od_color_direct_geometry(uint8_t color_scheme, uint32_t width,
       out.part_width[1] = width - out.part_width[0];
       break;
 
+    case OD_COLOR_SCHEME_INDEXED16_2PASS:
+      if ((width % 4u) != 0u) return OD_COLOR_BAD_GEOMETRY;
+      out.layout = OD_COLOR_LAYOUT_REFRESH_PASSES;
+      out.bits_per_pixel = 2u;
+      out.part_count = 2u;
+      out.initial_plane = OD_COLOR_PLANE_0;
+      out.part_width[0] = width;
+      out.part_width[1] = width;
+      break;
+
     case OD_COLOR_SCHEME_GRAY8:
     case OD_COLOR_SCHEME_RGB565:
     case OD_COLOR_SCHEME_RGB888:

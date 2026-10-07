@@ -14,6 +14,7 @@ struct epd_io_pins {
 };
 
 void epd_io_configure(const struct epd_io_pins *pins);
+void epd_io_reset_write(bool high);
 
 /* Chip-select control for dual-controller panels. By default every SPI transfer asserts `cs` for
  * its own duration, as the imported drivers expect. epd_io_cs_manual(mask) takes the lines over

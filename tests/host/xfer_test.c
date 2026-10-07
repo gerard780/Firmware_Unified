@@ -3,6 +3,7 @@
 #include "od_log.h"
 #include "od_reply.h"
 #include "od_xfer.h"
+#include "od_xfer_internal.h"
 #include "od_xfer_app.h"
 #include "od_zlib_inflate.h"
 #include "od_cmd_test_ctx.h"
@@ -637,6 +638,48 @@ static void test_controller_planes_incomplete(void)
     CHECK(!od_xfer_active() && g_replies[g_reply_n - 1u].plain);
 }
 
+static void test_refresh_passes(void)
+{
+    od_cmd_ctx_t owner = od_test_cmd_ctx(OWNER, &g_reservation, 2u, false);
+    uint8_t raw[16] = {0}, compressed[40], start[44], fast = 1u;
+    size_t compressed_n;
+    CASE("two-pass stream refuses excess bytes without a partial write");
+    setup();
+    CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 8, 2, &g_panel.geometry) == OD_COLOR_OK);
+    CHECK(od_xfer_direct_start(&owner, od_span_none()) == OD_CMD_OK);
+    CHECK(od_xfer_data(&owner, od_span_make(raw, 9)) == OD_CMD_NACK);
+    CHECK(g_write_calls == 0 && !od_xfer_active());
+    CASE("two-pass incomplete END is NACKed before refresh");
+    setup();
+    CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 8, 2, &g_panel.geometry) == OD_COLOR_OK);
+    CHECK(od_xfer_direct_start(&owner, od_span_none()) == OD_CMD_OK);
+    CHECK(od_xfer_data(&owner, od_span_make(raw, 7)) == OD_CMD_OK);
+    CHECK(od_xfer_end(&owner, od_span_none()) == OD_CMD_NACK);
+    CHECK(g_refresh_calls == 0 && !od_xfer_active());
+    CASE("two-pass rejects FAST even with a complete frame");
+    setup();
+    CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 8, 2, &g_panel.geometry) == OD_COLOR_OK);
+    CHECK(od_xfer_direct_start(&owner, od_span_none()) == OD_CMD_OK);
+    CHECK(od_xfer_data(&owner, od_span_make(raw, 8)) == OD_CMD_OK);
+    CHECK(od_xfer_end(&owner, od_span_make(&fast, 1)) == OD_CMD_NACK);
+    CHECK(g_refresh_calls == 0 && !od_xfer_active());
+    CASE("two-pass geometry refuses PIPE admission");
+    setup();
+    CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 8, 2, &g_panel.geometry) == OD_COLOR_OK);
+    CHECK(od_xfer_pipe_arm_full(&owner, 8, false) == OD_XFER_START_SPLIT_LAYOUT);
+    CHECK(!od_xfer_active());
+    CASE("two-pass compression consumes both components before START ACK");
+    setup();
+    CHECK(od_color_direct_geometry(OD_COLOR_SCHEME_INDEXED16_2PASS, 16, 2, &g_panel.geometry) == OD_COLOR_OK);
+    compressed_n = make_stored(od_span_make(raw, 16), compressed);
+    start[0] = 16; start[1] = start[2] = start[3] = 0;
+    memcpy(start + 4, compressed, compressed_n);
+    CHECK(od_xfer_direct_start(&owner, od_span_make(start, compressed_n + 4)) == OD_CMD_OK);
+    CHECK(g_written_n == 16 && g_reply_n == 1);
+    CHECK(od_xfer_end(&owner, od_span_none()) == OD_CMD_OK);
+    CHECK(g_refresh_calls == 1 && g_refresh_modes[0] == 0);
+}
+
 static void make_partial_start(uint8_t out[17], uint8_t flags, uint32_t old_etag,
                                uint32_t new_etag)
 {
@@ -917,6 +960,7 @@ int main(void)
     test_short_consumption_range();
     test_compressed_direct();
     test_controller_planes_incomplete();
+    test_refresh_passes();
     test_end_and_refresh_boundaries();
     test_partial();
     test_partial_end_boundaries();

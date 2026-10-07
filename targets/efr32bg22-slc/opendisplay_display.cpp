@@ -696,7 +696,7 @@ extern "C" bool od_xfer_app_panel_info(od_xfer_panel_info_t *out)
 {
   const struct DisplayConfig *d = display_cfg();
 
-  if (out == nullptr || d == nullptr) {
+  if (out == nullptr || d == nullptr || d->color_scheme == OD_COLOR_SCHEME_INDEXED16_2PASS) {
     return false;
   }
   memset(out, 0, sizeof(*out));
@@ -716,7 +716,8 @@ extern "C" bool od_xfer_app_begin_full(const od_color_geometry_t *geometry)
   int panel;
 
   if (d == nullptr || geometry == nullptr || geometry->total_bytes == 0u
-      || geometry->layout == OD_COLOR_LAYOUT_SPLIT_HALVES) {
+      || geometry->layout == OD_COLOR_LAYOUT_SPLIT_HALVES
+      || geometry->layout == OD_COLOR_LAYOUT_REFRESH_PASSES) {
     return false;
   }
   panel = opendisplay_map_epd(d->panel_ic_type);

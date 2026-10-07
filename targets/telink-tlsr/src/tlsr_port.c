@@ -42,10 +42,27 @@ uint32_t tlsr_port_noise32(void)
     return rand();
 }
 
+static uint32_t s_reboot_tick;
+static bool s_reboot_pending;
+
 void tlsr_port_reboot(void)
 {
-    analog_write(0x3b, 0u);            /* a requested reboot is not a hang: clear the breadcrumb */
-    start_reboot();
+    if (!s_reboot_pending) {
+        s_reboot_tick = clock_time();
+        s_reboot_pending = true;
+    }
+}
+
+bool tlsr_port_reboot_poll(void)
+{
+    if (!s_reboot_pending) return false;
+    /* Let the ATT Write Response leave before reset; bound a stalled radio's drain. */
+    if (clock_time_exceed(s_reboot_tick, 100000u) &&
+        (blc_ll_getTxFifoNumber() == 0u || clock_time_exceed(s_reboot_tick, 1000000u))) {
+        analog_write(0x3b, 0u);        /* a requested reboot is not a watchdog hang */
+        start_reboot();
+    }
+    return true;
 }
 
 static GPIO_PinTypeDef pin_of(uint8_t pin)

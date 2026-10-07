@@ -661,7 +661,9 @@ add_test(NAME tlsr_aes_modes COMMAND od_tlsr_aes_modes_test)
 # -Wunused-parameter is relaxed for those files only.
 set(TLSR_SRC ${CMAKE_CURRENT_SOURCE_DIR}/../../targets/telink-tlsr/src)
 add_executable(od_tlsr_display_test tlsr_display_test.c
-               ${TLSR_SRC}/od_xfer_tlsr.c
+               ${TLSR_SRC}/od_xfer_tlsr.c ${TLSR_SRC}/epd/hanshow_qn.c
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/core/od_zlib_inflate.c
+               ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/core/od_zlib_pump.c
                ${TLSR_SRC}/epd/UC81xx.c ${TLSR_SRC}/epd/SSD16xx.c ${TLSR_SRC}/epd/TI97xx.c
                ${TLSR_SRC}/epd/epd_models.c ${TLSR_SRC}/epd/epd_io.c
                ${CMAKE_CURRENT_SOURCE_DIR}/../../shared/core/od_color.c
@@ -1116,3 +1118,8 @@ else()
     message(STATUS "od: fuzz targets NOT built (needs Clang); the pre-auth surface is "
                    "UNFUZZED in this build")
 endif()
+
+add_test(NAME tlsr_waveform_provisioning COMMAND ${Python3_EXECUTABLE} -m unittest discover
+         -s ${TLSR_SRC}/../tools -p test_provision_hanshow_waveforms.py)
+add_test(NAME tlsr_memory_profile COMMAND ${Python3_EXECUTABLE} -m unittest discover
+         -s ${TLSR_SRC}/../tools -p test_memory_profile.py)

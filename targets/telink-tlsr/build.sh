@@ -8,6 +8,6 @@ OUT="${OUT:-${ROOT}/build/telink-tlsr}"
 
 "${HERE}/tools/fetch_deps.sh"
 cmake -S "${HERE}" -B "${OUT}" -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE="${HERE}/cmake/tc32-toolchain.cmake"
+      -DCMAKE_TOOLCHAIN_FILE="${HERE}/cmake/tc32-toolchain.cmake" "$@"
 cmake --build "${OUT}"
 echo "image: ${OUT}/opendisplay_tlsr.bin"

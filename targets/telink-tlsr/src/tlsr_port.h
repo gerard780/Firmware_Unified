@@ -94,7 +94,10 @@ uint16_t tlsr_port_battery_mv(uint8_t pin);
 
 void tlsr_port_mac(uint8_t out[6]);
 void tlsr_port_set_adv_msd(const uint8_t msd[16]);
+/* Request reset after the SDK can send its ATT response. The main loop services
+ * the stack while poll returns true, without dispatching more application work. */
 void tlsr_port_reboot(void);
+bool tlsr_port_reboot_poll(void);
 
 /* ---- implemented on the OD side (od_tlsr_app.c), called from the SDK side ---- */
 

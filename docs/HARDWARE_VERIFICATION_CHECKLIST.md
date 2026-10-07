@@ -1251,3 +1251,636 @@ ATC config and the generated OpenDisplay config backed up before the install.
 Found on the way, fixed, and guarded: tc32 at `-Os` emits broken switch jump tables (the first
 command hung the chip) — the OD side builds at `-O2` and `tools/check_jump_tables.py` fails the build
 on a table that points outside its function.
+
+## Native Hanshow Q-N — Pro-266Q-N (2026-10-05)
+
+Scope: the owner's swapped **Pro-266Q-N E3LW2 / HSEL7_02_66M_30**,
+152 × 296, panel 1036, mode 10, on the bounded 32 KiB `telink-tlsr` profile.
+The SWS flash UID matches the existing intact-266 recovery record; the webcam
+showed the original fox scene before installation. This is a native build of
+`g4bri3lDev/Firmware_Unified` on `codex/hanshow-indexed16`, based on
+`a5344b401dd8e38d3510221130d59ecdb27bc239`, with uncommitted changes.
+It does not qualify a commercial controller identity, another flex revision,
+the physically marked MCU/SRAM size, or Pro-154Q-N.
+
+The owner authorized identification, flashing and webcam/BLE tests. Ambient
+temperature was **owner-reported 24–25 °C**; the Pi's bench sensor was unavailable,
+and no fresh sensor or panel-temperature measurement is claimed. The private
+provider selects the captured band-6 pair. Its offline manifest's 24.5 °C is a
+compile-time selection value, not a measured temperature. Factory waveform
+redistribution rights remain unresolved; no recovered bytes or waveform-bearing
+images were added to tracked source, pushed or published.
+
+Read-only provenance verification on 2026-10-06 matched both installed 266
+band-6 record hashes exactly to captured `266-0cnspq1tl` family 0 (546-byte
+records, source specimen 526), associated with **704542/E3LW2** in the
+owner-confirmed factory comparison. The **404545/E3LW2** family uses
+`0ENSPQ1YQ` and distinct 556-byte records/command extensions. Both recovered
+families have stock driver 24; the installed OpenDisplay implementation is
+`hanshow_qn.c`, not the newly recovered stock-driver library. All native palette
+tests through the grouped sixteen-code upload below used the
+704542-associated band-6 pair; the later 404545 comparison has separate evidence. Verification is
+private `waveform-family-check-20261006.json`; no hardware access or firmware,
+waveform or configuration change was performed for this clarification.
+
+Private evidence is retained in workspace
+`.private/native-hanshow-266-20261005/` (outside this Git repository) and the Pi's
+`bench-session/native-hanshow-266-20261005-session/`.
+`identity-check.json`, the original `install-plan.json`, `revision2/` and
+`revision3/` contain identity checks, exact sector preimages, desired bytes,
+fingerprints and programming logs. `ble-events.jsonl` records actual client
+opcodes and completion timings. Photos are `before.jpg`,
+`exact-requests-settled.jpg`, `rgb-settled.jpg`, `drive-codes-settled.jpg`,
+`boot-settled.jpg`, and `final-settled.jpg`. Hardware rows below refer to those files, not to a generic
+firmware-version string: the target still reports `tlsr825x-diag2`.
+
+Initial native candidate SHA-256:
+`503017fc87d04fdc6a0cc08992e2cbbc93e073e7787cc4c7c091553e362e3bb0`.
+Write-Request candidate SHA-256:
+`b98b59aeadb616345479544a0a3a06e66d8a9fe2ca58655aeb0c2bc309879392`.
+Final deferred-reboot candidate SHA-256:
+`db76993174818597a137f79cc41af8baebca945257b28eca33d9d8a107171591`.
+Panel code and shared transfer code are unchanged between the latter two.
+
+- [x] **Identity and recovery preconditions:** chip signature `026255`, JEDEC
+      `eb6013` (512 KiB flash), twice-checked same-tag UID and protection
+      `0x382c`. Reused existing application/full-reference material; no fresh
+      full backup. Captured only reviewed sectors, including the original
+      native-config sector preimages at `0x7a000` and `0x7b000`.
+- [x] **Initial native install and transport revision:** application sectors
+      `0x00000–0x1b000` and a separately reviewed SDK MAC at `0x76000` were
+      programmed and fully read back, with entry sector last. The transport
+      revision mutated only `0x18000` and `0x1b000`. Twelve sampled preserved
+      sectors matched before/after each transaction, including `0x40000`, SDK
+      metadata and native NVS. Protection restored; reset echo verified; no
+      SWS transport faults. This does not certify every alternate-bank byte.
+- [x] **Native BLE and persisted configuration:** normal company/service
+      `0x2446`, firmware version `0x0043`, config write/read `0x0041/0x0040`,
+      reconnect and configuration read after reboot. Canonical configuration
+      contains IC 10, manufacturer 7, panel 1036, dimensions 152 × 296,
+      color mode 10 and raw/ZIP/direct modes. No fabricated ADC reading.
+- [x] **Linux client configuration writes:** the first 135-byte wire config
+      failed with ATT error 14 at reported MTU 23. Guarded BlueZ MTU acquisition
+      before notifications yielded MTU 247, after which config persisted.
+      The final client discovers Write Request on the OpenDisplay characteristic
+      and acquires MTU via an available WNR characteristic without sending OTA
+      data or entering DFU.
+- [x] **Exact logical indices, raw, plaintext:** canonical Python
+      `upload_indexed_image` mapped the seven-index asymmetric chart, sent
+      22,496 wire bytes (two 11,248-byte components), and received START/END
+      acknowledgments plus `0x0073` completion in **28.884 s** on the
+      Write-Request candidate. Corner markers, native row orientation and
+      provisional color bands observed on the webcam. The prior candidate
+      completed the same image in 28.888 s when explicitly forcing requests.
+- [x] **Compressed streaming, plaintext:** canonical ZIP upload, **23.472 s**.
+      Its 200-byte START caused the first refresh before the START acknowledgment;
+      the remaining compressed bytes arrived in DATA. END and completion
+      succeeded, with one START and no retry to raw mode. This exercises
+      controller storage and the small inflater across the component boundary;
+      no second host replay or MCU framebuffer was supplied.
+- [x] **Ordinary RGB conversion, raw, plaintext:** normal `upload_image` with
+      an RGB image and the provisional seven-state conversion completed in
+      **28.697 s**, with successful END/completion and settled webcam image.
+- [x] **Exact packed4 drive-code input, raw, plaintext:** 22,496 packed bytes
+      containing all codes `0x0–0xf`, using explicit `drive_codes=True`, completed
+      in **28.950 s**. The photographed chart labels all sixteen electrical
+      codes and states that RGB is uncalibrated. Accepted drive codes and visible
+      differences are not sixteen measured, stable optical colors.
+- [x] **Boot renderer:** enabling boot mode (`transmission_modes=0x0b`) and
+      rebooting without a subsequent BLE connection produced the native QR/text
+      screen on the webcam; later `0x0044` read reported boot status `0xb2`.
+      This exercises the bounded single-line renderer on this panel. The QR
+      payload was not decoded or phone-scanned.
+- [x] **Limited interruption recovery:** two early raw Write Without Response
+      uploads stalled at the second DATA chunk; no new image was observed.
+      Disconnecting those owned client attempts and reconnecting permitted a
+      subsequent full Write Request upload. The underlying WNR failure remains
+      unexplained. The 32 KiB profile omits that advertised property; the
+      ordinary client consequently selects requests. This is not the complete
+      per-phase interruption matrix.
+- [x] **Final deferred-reboot candidate:** all 28 application sectors were
+      programmed and read back; the unchanged MAC was compared without writing,
+      and the same twelve preserved sectors matched before/after. Protection
+      `0x382c`, reset echo and zero SWS faults verified (`revision3/flash-events.jsonl`).
+      Normal config write followed by `0x000f` reboot returned successfully,
+      then a fresh connection read the persisted config and completed a ZIP
+      upload in **23.463 s** (`ble-events.jsonl`). Settled webcam chart confirmed
+      (`final-settled.jpg`, SHA-256
+      `2328991cbd089f26024fd02a35201cf70f0b69e27daec8b3665f6887da022a2f`).
+      The final tag is left running this native image with `transmission_modes=0x8b`
+      to preserve uploaded images across reboot; boot rendering was tested with
+      `0x0b`. Application/config/MAC recovery material remains private; actual
+      restoration to the former application was not exercised.
+- [ ] **Remaining qualification:** Pro-154Q-N; encrypted uploads; actual
+      website/CLI BLE workflows; cold power cycle and phone QR scan; optical
+      calibration/persistence; GPIO/SPI/BUSY/supply traces; energy/current;
+      measured main/IRQ stack high-water; temperature sensing/band selection;
+      stuck BUSY, idle timeout and full per-phase fault/recovery matrix;
+      wireless OTA after deferred initialization; existing BWR/BWY hardware
+      regression on the unchanged 64 KiB memory profile; other PCB/flex variants.
+
+Software budgets for the final candidate: 112,100-byte finished image,
+28,940-byte RAM occupancy including the 384-byte IRQ stack, and 3,828 bytes
+remaining for main stack plus reserve. These are linked budgets, not hardware
+stack high-water measurements. See `docs/hanshow-qn.md` for the implementation
+and software regression/build record.
+
+### Experimental twelve-entry RGB palette (2026-10-06)
+
+Same intact Pro-266Q-N and native firmware SHA-256
+`db76993174818597a137f79cc41af8baebca945257b28eca33d9d8a107171591`.
+No firmware reflash, configuration write, reset, new backup, waveform change,
+or publication was performed. The owner explicitly instructed using an assumed
+stable **24–25 °C office temperature** for these tests; this is not a fresh
+thermometer or panel measurement. The bench sensor returned no valid reading.
+The existing private band-6 pair remains unchanged.
+
+Evidence is private workspace `.private/hanshow-palette-20261006/` and Pi
+`bench-session/native-hanshow-palette-20261006/`. `owner-temperature.json`
+records the assumption; `events.jsonl` records actual Python API operations,
+input/stream hashes, logical-index histograms, ACKs and completion timings.
+`stage-sha256.json` identifies the staged client source; `cross-client-parity.json`
+records offline Python/browser equality for the detailed image.
+
+- [x] **Preflight and reconnect:** normal native firmware/config interrogation,
+      IC 10, manufacturer 7, panel 1036, mode 10, native 152 × 296, rotation 0,
+      modes `0x8b`, MTU 247 and Write Request. Both image tests established
+      a fresh ordinary client connection; no private image opcode was used.
+- [x] **Twelve-entry RGB chart:** `upload_image(...,
+      hanshow_palette="experimental12", dither_mode=NONE, compress=True)`
+      converted the nominal RGB chart through existing dithering/streaming.
+      All twelve logical slots and drive codes appeared in the generated image;
+      22,496 uncompressed bytes / 2,390 compressed bytes; START/END ACK and
+      `0x0073` completion in **23.780 s**. Returned P-image indices and RGB
+      preview matched the independent preparation. Settled labels/swatches
+      visible in `twelve-swatches-settled.jpg` (underexposed morning capture,
+      SHA-256 `fcf18b77e74fa3d4398e321951bddb4e98fe5f98c216e3695a141b99e51e48ec`).
+      This proves conversion/transfer, not twelve measured optical colors.
+- [x] **Most detailed original artwork:** used the 1,749 × 899 original
+      forest/lake/fox/cottage/flowers source, SHA-256
+      `343cf9fb92c8266075e4427891c3866ec0c68368c506858f8c77293640ea8c0a`,
+      with ordinary contain fitting, clockwise API rotation 270°, NONE
+      dithering and `experimental12`. No scene simplification or coarse pixel
+      grid was applied. All twelve entries remain present at native resolution.
+      The 22,496-byte stream compressed to 9,276 bytes and completed in
+      **25.290 s** with START/END ACK and `0x0073`; returned image/preview
+      matched preparation. Stream SHA-256
+      `b5853a2d41dabdb50c0abaab4cb410382fccf5129680c7a72b71da3d9ca32b59`.
+      Landscape orientation, complete scene, fine forest/lake details and warm
+      and neutral shades observed on the webcam. Camera auto-exposure was enabled
+      for the final capture; no captured pixels were edited. Photo
+      `detailed-settled.jpg`, SHA-256
+      `98eb432f73d89bd25bfc37556640fedd534b57a7ba28d7a56d793cd1e9e2e059`.
+- [x] **Python/browser stream parity, software only:** the real browser WASM
+      converter and BLE encoder produced byte-identical data to Python for
+      the fitted detailed RGB image, with all twelve drive codes present.
+      This is not an actual Web Bluetooth session. Host API, CLI argument
+      forwarding, UI selection/preview/histogram/send paths and fixture drift
+      checks passed; default seven-state behavior and exact-input maps remain
+      unchanged. Shared palette fixture SHA-256
+      `40588949e589216235750eb0d261bcc8436de16daa5db0a967420a3c7db3b6f1`.
+- [x] **Owner-requested twelve-entry rainbow demo:** original 296 × 152 RGB
+      artwork contains twelve concentric warm/neutral arch bands and twelve
+      named swatches with drive-code labels. Ordinary Python RGB conversion,
+      `experimental12`, NONE dithering and API rotation 270° retain all twelve
+      entries exactly. Actual native BLE upload transferred 22,496 uncompressed
+      bytes / 4,362 compressed bytes, with START/END ACK and `0x0073` completion
+      in **24.199 s**. Returned indices and RGB preview matched preparation.
+      The webcam shows the complete rainbow, header and labeled swatches; this
+      remains a demonstration of twelve codes, not calibrated distinct optical
+      colors. No blue/green mapping, firmware/configuration change, USB image
+      transfer, reset, new backup or publication. The same owner-assumed
+      24–25 °C condition applies. Evidence is private workspace
+      `.private/hanshow-rainbow-20261006/` and Pi
+      `bench-session/native-hanshow-rainbow-20261006/`;
+      `rainbow-manifest.json`, `offline-check.json` and `events.jsonl` retain
+      source provenance, per-entry histograms and the actual BLE results.
+      Source SHA-256
+      `f7f95b67dd323f78f2b99cc29829ecaf7a238e1c566e41c97694b1f3a155e2d2`;
+      stream SHA-256
+      `ed19c289dedd83e53ef296df58f72053aef3d87cdaf8cb4470424091c6c66d4a`;
+      settled photo `rainbow-settled.jpg`, SHA-256
+      `1eb4f9706873ff417485e1ea586f245e7101c5430172be2427f26e251f6cadd3`.
+- [x] **Owner-requested all-sixteen-code rainbow chart:** native 152 × 296
+      P-mode image uploaded through public `upload_indexed_image(...,
+      drive_codes=False, compress=True)` over ordinary BLE. Landscape source
+      transposed without RGB conversion, fitting or dithering; independent
+      component decoding verified every drive code `0x00`–`0x0F` and each swatch
+      label. Codes `0, 3, 8, 12` use explicitly arbitrary preview values marked
+      `?`; existing twelve nominal RGB values and firmware waveforms are unchanged.
+      Initial chart completed in **24.370 s**, but code `0x08` appeared dark and
+      its black label had poor contrast. Initial artifacts/photo/results are
+      retained in private `revision1/`. Revision 2 places every code label on
+      an ivory strip with black text, independently of swatch appearance;
+      all sixteen codes remain present. Final 22,496 uncompressed bytes /
+      4,922 compressed bytes received START/END ACK and `0x0073` completion in
+      **24.217 s**. Webcam inspection shows the complete chart and readable code
+      labels. Several swatches appear similarly dark; this establishes exact
+      transfer/rendering, not sixteen distinct or calibrated optical colors.
+      Same owner-assumed 24–25 °C condition, native firmware and configuration;
+      no reflash, reset, backup, configuration write or publication.
+      Evidence: private workspace `.private/hanshow-all16-20261006/` and Pi
+      `bench-session/native-hanshow-all16-20261006/`, including
+      `all16-manifest.json`, `offline-check.json`, `events.jsonl` and retained
+      original chart. Final native PNG SHA-256
+      `1a97578310983b542e91164a3104577198d4a864b64fb200b5c83cf4bdc2d130`;
+      stream SHA-256
+      `500f716c8041909ce16c37527c3c70d51a6bde373df4fef76b5a50b852bbf1ae`;
+      photo `all16-labels-settled.jpg`, SHA-256
+      `79d52481b08b3bbfb8f8871674241d5e1ccf6fd6cf797edeb4241ed91b9193cb`.
+- [x] **Owner phone photograph of the final all-sixteen-code chart:** supplied
+      in this chat on 2026-10-06 and preserved byte-for-byte as private
+      `.private/hanshow-all16-20261006/owner-phone-photo.jpg`, SHA-256
+      `25bb16f2730d883142578a9b7ec5fd9f86af4957c03ab655e2554e80bc831efa`.
+      Close view shows the complete bands and sixteen code labels. Qualitative
+      appearances of the four extra codes in this photo: `0x00` dark brown,
+      `0x03` muted rosy brown, `0x08` near-black, `0x0C` deep reddish brown.
+      Coral/orange and yellow bands are visibly saturated; no blue or green
+      pigment appearance is established. Uneven lighting and lower-left shadow
+      are visible. No color reference or camera calibration was supplied, so
+      these are photo observations rather than calibrated RGB values or a
+      measured count of distinct optical colors. Observations are retained in
+      `owner-phone-observations.json`; RGB mappings/waveforms remain unchanged.
+      No hardware operation was performed while processing this evidence.
+- [x] **Owner-requested grouped similar-shade comparison:** large adjacent
+      swatches cover all sixteen exact drive codes, using qualitative grouping
+      from the owner phone photo. Top row: `05, 06, 07, 0B, 08, 04, 00, 0C`;
+      bottom row: `09, 0A, 01, 0E, 02, 03, 0F, 0D`. All sixteen label positions,
+      native P indices and decoded component-stream pixels independently checked;
+      known ivory/black label strips are independent of swatch appearance.
+      No RGB mapping changed. First connection attempt failed with a BlueZ
+      device-not-found error before configuration verification or image START.
+      A fresh BLE scan found the target; owner reported moving it closer. The
+      normal retry interrogated the expected native profile and transferred
+      22,496 uncompressed bytes / 1,135 compressed bytes through public
+      `upload_indexed_image()`, receiving START/END ACK and `0x0073` completion
+      in **24.209 s**. No reset, firmware/configuration/waveform change, backup,
+      USB image transfer or publication. Same owner-assumed 24–25 °C applies.
+      Screen was outside the webcam's view after the upload, so protocol
+      completion is verified and visual confirmation of this chart is pending.
+      Private evidence: `.private/hanshow-grouped16-20261006/` and Pi
+      `bench-session/native-hanshow-grouped16-20261006/`, including
+      manifest, grouping basis, offline checks, connection notes and BLE events.
+      Native PNG SHA-256
+      `333f47611c7424e7d15d08a76997a243063b37554b6e2ef6a1f98b400eac9bb7`;
+      stream SHA-256
+      `5ab9a64714fde04b9f75a4b8c99cc699263df0aab657b09abe2ac92820afb407`.
+      After-upload camera view `grouped16-after-upload.jpg`, SHA-256
+      `78491466dfb2fdd474e391ddc613c087cf82db5ec7f02b86eb342dce58229e33`.
+- [ ] **Further palette qualification:** actual browser/CLI hardware uploads;
+      optical separation, calibrated RGB, persistence and repeatability of the
+      twelve entries; additional RGB mappings for codes `0, 3, 8, 12`;
+      Pro-154Q-N experimental palette. Twelve codes remain an uncalibrated
+      host option; sixteen exact codes remain available without an RGB claim.
+
+The grouped sixteen-code chart completed on the 704542-profile native firmware.
+After the owner repositioned the tag, the 2026-10-06 fixed-camera baseline
+confirmed the complete chart and labels; the earlier out-of-view capture alone
+did not establish its appearance.
+
+
+### 404545 waveform-family comparison (2026-10-06)
+
+The owner requested the 404545 waveforms on the same connected Pro-266Q-N.
+The native driver gained an explicit `0ENSPQ1YQ` family selector. This comparison
+changes the complete family profile: two 556-byte band-5 records, in-position
+`06`/`60`/`65` initialization overrides, pass-1 `50:97`, and `00:27a9` before
+power-off. It retains the same panel ID 1036, index-to-drive-code mapping,
+two-component data order, streaming, configuration and BLE protocol. The
+legacy `0CNSPQ1TL` default and 154 behavior remain covered by host tests.
+Factory band 5 selects 20 < T ≤ 25 °C; this trial uses the owner's standing
+24–25 °C office-temperature assumption, with no fresh measurement.
+
+Private evidence is `.private/hanshow-404545-20261006/` and Pi
+`bench-session/native-hanshow-404545-20261006/`. Full-record SHA-256:
+
+- Pass 0: `9d8fa882b31f725834142184caa401d0b6768747b69273741be312e29c5293a0`.
+- Pass 1: `66408af760070bb0e6ceac45d623fd69752b59b72e5409d08af28b228a9f66da`.
+
+No recovered waveform bytes or waveform-bearing binaries are tracked. Register
+and sequence facts were independently implemented in native OpenDisplay C;
+no external application or waveform command executor was transplanted.
+
+- [x] **Host regressions:** 293 display checks, zero failures, including legacy
+      profiles and explicit 404545 initialization/shutdown traces, under actual
+      Clang AddressSanitizer/UndefinedBehaviorSanitizer (`detect_leaks=0` for
+      sandbox limitations). Five synthetic provisioner tests passed, including
+      complete extension/length/hash refusal and existing-family defaults.
+- [x] **Target builds:** existing pinned tc32/SDK, actual 32 KiB and 64 KiB builds
+      passed image/header/CRC, jump-table and memory gates. The installed 32 KiB
+      image is 112,388 B, SHA-256
+      `4a64b5d1745b96418f7a8199afdb27ae09c20c4c30147b62d4be632b8fac1aa3`.
+      Occupied RAM stays 28,940 B, stack/reserve 3,828 B (384 B IRQ included in
+      occupancy); finished image grows 288 B from the previous 112,100 B trial.
+      The 64 KiB image is 112,356 B with 35,348 B occupied/30,188 B reserve.
+      Stack figures are linked budgets, not measured high-water values.
+- [x] **Application-only installation:** chip/flash/UID and all 28 live application
+      sectors first matched retained revision-3 references. No fresh backup
+      was taken. Sectors `0x00000–0x1b000` were programmed, entry sector last;
+      all desired bytes passed readback. Thirteen protected sector hashes
+      (alternate-bank start, calibration/MAC/configuration/factory regions)
+      were unchanged; the programmer allowed writes only to application sectors.
+      Original protection `0x382c`, reset echo and zero programmer transport
+      faults were verified. Normal boot preserves factory/alternate data.
+- [x] **Post-install BLE/configuration:** connected through ordinary OpenDisplay;
+      panel 1036, 152 × 296, mode 10, rotation 0, transmission mask `0x8b`,
+      MTU 247 and ATT Write Request verified. The firmware version label remains
+      `tlsr825x-diag2`; application readback establishes this candidate's identity.
+      Initial chart helper stopped on a missing staged image before START;
+      staging the unchanged PNG/wire input resolved the helper failure.
+- [x] **Identical all-code BLE chart:** original grouped native indexed PNG
+      SHA-256 `333f47611c7424e7d15d08a76997a243063b37554b6e2ef6a1f98b400eac9bb7`,
+      22,496-byte component stream SHA-256
+      `5ab9a64714fde04b9f75a4b8c99cc699263df0aab657b09abe2ac92820afb407`,
+      compressed to 1,135 B. All sixteen exact drive codes included, no RGB
+      conversion. Ordinary START `0070`, END `0072` and completion `0073`
+      observed; upload-to-completion 24.277 s (previous 704542 chart 24.209 s).
+      Both passes completed and settled grouped chart/labels were visible.
+- [x] **Qualitative camera comparison:** baseline `baseline-fixed750-camera.jpg`,
+      SHA-256 `cecd75205e2d0a3b839404ba0a5db77d9b358b219d0df654375b1d0ea303ecfa`;
+      after `404545-fixed750-after.jpg`, SHA-256
+      `be965b0b85220c9a97553ff9b044aa95649fb19d44d78577e75336b4512c0711`.
+      Both used fixed manual exposure 750, gain 3, white balance 2922, focus 40.
+      Framing changed between images, and illumination/perspective were not
+      calibrated. Warm and neutral shades resemble the baseline; dark-code
+      swatches remain visually close. No clear improvement or additional
+      separable optical colors is established. Automatic exposure/white balance
+      were restored after capture. `comparison.json` records these limitations.
+- [ ] **Further 404545 qualification:** repeated/reversed transitions, optical
+      color separation/calibrated RGB, temperature selection, measured main/IRQ
+      stack high-water, power/current and other specimens. Pro-154Q-N was not
+      flashed or refreshed in this comparison.
+
+At the end of the 404545 trial the connected tag retained its verified private
+band-5 candidate and grouped sixteen-code chart for owner inspection. The
+subsequent owner-requested return to 704542 is recorded below. This is a scoped native
+OpenDisplay test, not factory-driver installation or general release qualification.
+
+
+### Same-chart return to 704542 (2026-10-06)
+
+The owner requested the same image with 704542 after the 404545 comparison.
+The retained native revision-3 application was restored, rather than rebuilding
+with changed source. It selects the previously tested `0CNSPQ1TL` band-6 pair
+and legacy initialization/shutdown; image indices, drive-code mapping, wire
+order, configuration and client are unchanged. Owner-assumed 24–25 °C remains
+the standing test condition; no new temperature measurement is claimed.
+Private evidence: `.private/hanshow-704542-return-20261006/` and Pi
+`bench-session/native-hanshow-704542-return-20261006/`.
+
+- [x] **Exact retained application restored:** prior 404545 application sectors
+      matched retained references before mutation; 28 application sectors
+      restored with entry sector last, all desired bytes readback verified.
+      Installed SHA-256
+      `db76993174818597a137f79cc41af8baebca945257b28eca33d9d8a107171591`,
+      112,100 B. Thirteen protected sector hashes unchanged, original protection
+      `0x382c` verified, reset echo and zero transport faults. Writes confined
+      to application sectors; no fresh backup, MAC/configuration/factory/alternate
+      bank mutation or publication. Retained 404545 references support recovery.
+- [x] **Same chart over BLE:** panel 1036, mode 10, 152 × 296, rotation 0,
+      mask `0x8b`, MTU 247 and Write Request verified. Original indexed PNG and
+      22,496-byte wire stream hashes match the preceding chart exactly; 1,135 B
+      compressed, all sixteen drive codes, no RGB conversion. START `0070`,
+      END `0072` and completion `0073` observed; 23.594 s upload-to-completion.
+- [x] **Settled screen captured:** fixed manual exposure 750, white balance 2922,
+      focus 40 retained for `404545-before-return.jpg` (SHA-256
+      `1dbcde8dadbb1aecfd121a5df45bb313c6a4c8383af250e08d75759d9e8b8216`)
+      and `704542-after-return.jpg` (SHA-256
+      `14320cb1cd9e9d98e9b4d477cf71409a80ddde4eff0c5be42a76351f88c15a46`).
+      Complete chart and code labels visible; warm/neutral shades retained and
+      several dark swatches remain close. Lighting/perspective are uncalibrated;
+      no new optical count or RGB calibration is established. Camera automatic
+      exposure/white balance restored.
+
+Current connected tag retains the restored 704542 band-6 native candidate and
+the same grouped sixteen-code chart. Hardware lease released after verification;
+factory waveform bytes and both private candidates remain unpublished.
+
+
+### Touching sixteen-code rainbow (2026-10-06)
+
+The owner requested rainbow-style adjacent shades to compare possible optical
+colors. The original exact-index artwork uses sixteen contiguous nested arches
+and two rows of eight gapless color swatches. Code labels are below the colored
+areas, in outer-to-inner arch order: `05,06,0B,0A,09,01,0E,02,03,0F,0D,0C,00,07,08,04`.
+Grouping uses qualitative owner-phone observations, not arbitrary preview RGB
+values; provisional mappings remain uncalibrated and sixteen distinct optical
+colors are not claimed. The 704542 `0CNSPQ1TL` band-6 candidate is unchanged.
+Temperature remains owner-assumed 24–25 °C, with no fresh measurement.
+Private artifacts are `.private/hanshow-touching16-20261006/` and Pi
+`bench-session/native-hanshow-touching16-20261006/`.
+
+- [x] **Offline exactness/adjacency:** every consecutive arch pair shares at least
+      56 raster-edge pixels, no separator pixels; each lower patch has a uniform
+      exact code and touches its neighbor. All sixteen codes are present, each
+      at least 742 pixels. Independent two-component decode matched every pixel
+      in native reversed-row order. P-mode 152 × 296 input; no RGB conversion.
+      PNG SHA-256 `4ca720236e03b5aa8ce95a00bbb9b66d8db4d194811c6f342b5d33d820386c80`;
+      wire SHA-256 `9d054a6051e3da96c09777afd3e7e1a89df8f23fd6161987f1054c5fa93b0394`.
+- [x] **Actual BLE upload:** panel 1036/mode 10/rotation 0/mask `0x8b`, MTU 247 and
+      Write Request verified. Stream 22,496 B compressed to 3,561 B; actual START
+      `0070`, END `0072` and completion `0073` observed, 24.007 s upload-to-completion.
+      No firmware/configuration/programmer/backup operations or publication.
+      Installed application digest is the retained prior wired verification;
+      the live version label is not a fresh binary hash measurement.
+- [x] **Visual confirmation:** `touching16-settled.jpg`, SHA-256
+      `078d4a9dba93f762dac7d2269bdb46a2bc7d90e92042504cda5c31ceb1f45831`,
+      shows complete contiguous arches and labeled gapless swatches. Pi camera
+      used its existing automatic exposure/white balance; optical RGB and
+      distinct-color count remain unqualified. Dark shades remain close.
+
+At the end of this first touching-rainbow test, the connected tag retained
+704542 native firmware and the new chart. Hardware lease was released;
+this session only performed the requested ordinary BLE full-image upload.
+The subsequent 404545 comparison is recorded below.
+
+
+### Identical touching rainbow with 404545 (2026-10-06)
+
+The owner requested the same touching-rainbow test with the other profile.
+The verified private `0ENSPQ1YQ` band-5 native candidate was reinstalled; no
+new build or code changes. This selects the complete 404545 waveform-family
+initialization/refresh/shutdown behavior documented above. Panel 1036, exact
+index-to-drive mapping, two-component wire order and configuration remain
+unchanged. Standing temperature condition is owner-assumed 24–25 °C, not a
+fresh sensor measurement or qualification of every captured temperature band.
+Private evidence: `.private/hanshow-touching16-404545-20261006/` and Pi
+`bench-session/native-hanshow-touching16-404545-20261006/`.
+
+- [x] **Same retained candidate/application-only installation:** live identity,
+      protection and all 28 current 704542 application sectors matched existing
+      references before mutation; no fresh backup. Application sectors alone
+      changed, entry sector last. All desired bytes readback verified; installed
+      112,388 B image SHA-256
+      `4a64b5d1745b96418f7a8199afdb27ae09c20c4c30147b62d4be632b8fac1aa3`.
+      Thirteen protected sector hashes unchanged; original protection `0x382c`,
+      reset echo and zero programmer transport faults verified. MAC/configuration,
+      factory records and alternate-bank data preserved by bounded application writes.
+- [x] **Identical touching-rainbow BLE transfer:** native indexed PNG SHA-256
+      `4ca720236e03b5aa8ce95a00bbb9b66d8db4d194811c6f342b5d33d820386c80`;
+      full 22,496-byte stream SHA-256
+      `9d054a6051e3da96c09777afd3e7e1a89df8f23fd6161987f1054c5fa93b0394`.
+      Identical to the preceding 704542 test: all sixteen drive codes, same
+      touching-ring/swatches geometry, 3,561 B compressed, no RGB conversion.
+      Actual START `0070`, END `0072` and completion `0073` observed; 24.767 s
+      upload-to-completion versus 24.007 s on 704542. Configuration read verified
+      panel 1036, 152 × 296, mode 10, rotation 0, mask `0x8b`; MTU 247 and
+      Write Request retained. No configuration write or publication.
+- [x] **Settled camera observation:** fixed exposure 750/white balance 2922,
+      focus 40 paired captures `704542-fixed-before.jpg` (SHA-256
+      `629cee8d5f60c31a35967d16454644f5e651da78c4b36feb6940a654d669ef30`)
+      and `404545-fixed-after.jpg` (SHA-256
+      `357d2d3f1242a8a0739502073cabeb7fd2856b5fe75bd559aeb36cc7cd69e8cf`).
+      Center/right rainbow and code legend visible. A strong reflection obscures
+      the left side in both captures; reliable optical ranking and distinct-color
+      count remain unqualified. Normal automatic camera controls were restored;
+      `404545-auto-settled.jpg` is additionally overexposed and not suitable for
+      color comparison. No improvement is established from these images.
+
+Current connected tag retains the verified 404545 band-5 private native candidate
+and identical touching-rainbow chart. Hardware lease released after verified
+installation/BLE completion/camera capture; no publication or fresh backup.
+
+
+### Detailed fox over Bluetooth (2026-10-07)
+
+- [x] **Owner-requested detailed RGB fox upload:** original Pro-266Q-N,
+      panel 1036, 152 × 296, mode 10, rotation 0, mask `0x8b` read back.
+      Original 1749 × 899 source SHA-256
+      `343cf9fb92c8266075e4427891c3866ec0c68368c506858f8c77293640ea8c0a`;
+      ordinary `upload_image`, source rotation 270°, no dithering,
+      `experimental12` provisional RGB palette. Exact 22,496-byte stream SHA-256
+      `b5853a2d41dabdb50c0abaab4cb410382fccf5129680c7a72b71da3d9ca32b59`
+      matches the prior detailed fox preparation. Raw direct START `0070`,
+      END `0072`, completion `0073` and subsequent READ_MSD `0044` observed;
+      35.498 s, 128-byte acknowledged DATA chunks and a 1.2 s post-START pause.
+      Returned indexed image matches independent preparation. MTU 247;
+      Write Without Response unavailable. Standing ambient assumption 24–25 °C.
+      No firmware/configuration writes, programmer/154 operations or publication.
+- [ ] **Compressed retry / optical confirmation:** two discovery attempts failed
+      before the owner power cycled the tag. Three subsequent compressed attempts
+      accepted START but failed on DATA with GATT `UNLIKELY_ERROR`, including
+      230-byte and 128-byte chunks. Cause remains unisolated; raw success with
+      an additional pause does not qualify compressed recovery. Existing firmware
+      replies `1.0.0 / tlsr825x-diag2`; application SHA was not reread this session.
+      Retained last wired application is the 404545 band-5 candidate above.
+      The bench camera faces the wired 154, so this Bluetooth-only 266 has no
+      new camera observation or measured optical-color qualification.
+
+Private evidence: `.private/fox-266-20261007/` and Pi
+`bench-session/fox-266-20261007/`. The tag reported refresh completion
+for the detailed fox and remains on its existing firmware/configuration.
+
+
+## Native Hanshow Q-N — Pro-154Q-N (2026-10-07)
+
+Owner connected the original **Pro-154Q-N C3HW2 / HSEL4Q_01_54M_39** to the
+Pi/RP2040; same-tag UID matched the retained 154 record before any application
+write. MCU signature `026255`, JEDEC `eb6013` (512 KiB), bounded **32 KiB SRAM**
+profile. This is native `Firmware_Unified/targets/telink-tlsr`, not the historical
+standalone framework. The owner's Pro-266Q-N remained Bluetooth-only and untouched.
+Ambient **24–25 °C is owner-assumed**, not freshly measured. No publication,
+dependency upgrade, fresh full backup, or external research modification occurred.
+
+Private workspace `.private/native-hanshow-154-20261007/`, Pi
+`bench-session/native-hanshow-154-20261007/`. The retained known-good
+application was source `961a437abef3d8`, SHA-256
+`03f59ae2291f41ab7180207cd1fd6e45c144468a1421d1d166627c1a2e9f77c3`;
+existing recovery/provision and bounded transaction preimages remain private.
+
+Final native candidate SHA-256
+`2f07ccb578749db4ce1c36b7b32ab967d19896e4c7629f1ff54df3f5cc323985`,
+**111,860 bytes**, **28,940 bytes occupied RAM**, **3,828 bytes stack/reserve**
+(including the separately accounted 384-byte IRQ stack in occupied RAM).
+No MCU image framebuffer or image replay. Hardware stack high-water and power
+remain unmeasured. The fixed private 154 band-6 records retain hashes
+`786473323a0847417cc04036b37faa107b5e2e7d824cffd52c126d6f9532f5a1` and
+`464513739a13052927f740e37be08321a65c3bd6eee261224a4ed0208e52f76b`;
+this does not qualify the full descriptor temperature range or optical palette.
+
+- [x] **Native installation and same-tag preservation:** initial candidate
+      `8bd4e52faeba0a4c7c0ce0875369d20b6379cf829dc7128cbf02753db7c3d08e`
+      and final boot-order candidate each verified all 28 application sectors,
+      sector zero last, 13 protected-sector hashes unchanged, original flash
+      protection `0x002c` restored, reset echo and zero transport faults. SDK MAC,
+      alternate bank, factory/provision and configuration regions preserved by
+      application programming. Normal later config writes use the native store.
+      Final plan fingerprint
+      `54725d65e8c1ea6930fd7a980def4c0bce855dd0a825852ac068da4ed8923905`.
+- [x] **Normal config/transport:** IC 10, manufacturer 7, panel 1035, 200 × 200,
+      mode 10, rotation 0, configured PB5 active-low power and existing panel pins;
+      raw/ZIP/direct with boot-suppression flag `0x8b`, MTU 247, Write Request.
+      Final metadata uses existing website driver/display indices **32/47**.
+      ADC disabled; reported battery 0 means unavailable, not discharged.
+- [x] **Controller temperature:** installed historical firmware initially reported
+      **28 °C nominal MCU estimate** and lacked the panel diagnostic characteristic.
+      Native firmware reported **25 °C nominal controller temperature** after the
+      disconnected startup probe and before/after image operations via standard
+      `READ_MSD`. Probe recognizes captured revision readback, observes fresh
+      `0x40` BUSY assertion/completion, and reads signed quarter-degree data without
+      HV/refresh; synthetic tests cover rejection/timeout/cancellation/cleanup.
+      Standard telemetry truncates to whole degrees and caches the last successful
+      probe; `READ_MSD` itself does not trigger conversion or report age. No
+      calibrated ambient/pigment temperature or automatic band selection claim.
+- [x] **154 ordering defect found and corrected:** initial raw **25.528 s** and
+      ZIP **20.986 s** uploads ACKed/completed but the source appeared 90° rotated
+      (`exact-settled.jpg`). Physical 154 order is **transpose**, unlike 266's
+      reversed rows. Corrected Python/browser packing and boot coordinate
+      evaluation; unchanged palette-index meanings, mode and transfer mechanisms.
+      Corrected raw asymmetric chart completed **25.542 s**, wire SHA-256
+      `ce06b07748f1ef45ffa9937ded34d06b9d93eb65e1dac9894978128eaae6c09c`.
+      `exact-corrected-settled.jpg` SHA-256
+      `a72a98a65f2b5b8216f9f28659a72f9b2490b528819aad4f670086c5187f2f54`:
+      unmirrored source coordinates/corners observed, 180° relative to camera
+      because the tag is physically mounted upside down, matching the prior QR.
+- [x] **Exact all-sixteen input on final firmware:** physical row-major packed4
+      drive-code chart (high nibble first) converted by the corrected encoder to
+      two 10,000-byte controller components. Full 20,000-byte raw direct upload,
+      START/END ACKs and `0x0073` completion in **25.458 s**; subsequent normal
+      telemetry/reconnect worked. Labels 00–0F and warm/neutral states visible in
+      `all16-settled.jpg`, SHA-256
+      `c0ef505a25c49e3fbc8df38abd490e2786fb6daa41fac296faebbf17bde584f1`.
+      This proves accepted drive codes, not sixteen distinct measured colors.
+- [x] **Ordinary RGB/ZIP on final firmware:** public `upload_image` with the
+      observed7 provisional palette and NONE dithering produced the same corrected
+      20,000-byte chart stream, compressed to **741 bytes**. START/END ACKs and
+      `0x0073` completion in **20.892 s**; returned indexed image matched independent
+      preparation. `rgb-settled.jpg`, SHA-256
+      `0995d0e6cf54dbeb765281d35e2a427881522da4a1cc7e23bb7f1d34b734c6b7`.
+- [x] **Software regression:** GCC and Clang display/boot tests plus explicit
+      Clang ASan/UBSan passed (leak detection disabled). Full-pixel asymmetric boot
+      references/all rotations and actual two-component projection test both panels.
+      Shared boundary checks passed. Python 37 focused tests and required lint
+      passed; all three browser suites and 92 preset registry passed; canonical
+      protocol six tests passed. Native 32 KiB private and 64 KiB unprovisioned
+      targets built and passed image/CRC/jump-table/memory gates. No silicon
+      regression on the disconnected 266 or other Telink devices is implied.
+      Shared panel-order fixture SHA-256
+      `452df027be9d4bb66bb3c29c70d2be5b6048540b4029e61a7b1b3eb8d5c6eec1`.
+- [x] **Automatic boot and persisted config:** normal config write enabled boot
+      (`0x0b`), followed by standard remote reboot. The native single-line renderer
+      completed (`dynamic[4] = 0xb2`), and normal config/temperature reads reconnected
+      afterward. QR/text and unmirrored orientation relative to the panel observed
+      in `boot-settled.jpg`, SHA-256
+      `e89f60c09cfd1c22d9739fac02c4c120536e61a7f851800c743ba8fe8b7abd53`.
+      Phone QR decoding remains unverified. Normal config write then restored boot
+      suppression (`0x8b`) and the existing 154 preset metadata; reboot succeeded.
+- [x] **Detailed original RGB scene:** original 1,749 × 899 artwork, source
+      SHA-256 `343cf9fb92c8266075e4427891c3866ec0c68368c506858f8c77293640ea8c0a`,
+      normal contain fitting to 200 × 200 and public source rotation 180° for the
+      upside-down mount. No scene simplification or cropping. observed7/NONE,
+      20,000-byte native stream / **4,146 compressed bytes**, stream SHA-256
+      `ee92fea74012aa06edbb32a3c04e132f26cb3a8fd776f8826871f242263b2d93`;
+      START/END ACKs and `0x0073` completion in **21.669 s**. Returned pixels matched
+      independent preparation. Complete scene, upright to the camera, visible in
+      `detailed-settled.jpg`, SHA-256
+      `7f3f42fbaf3a70ed51e5e70cbf586f8c421e5d75783756b918f6bdae1415f4a8`.
+      The wide source has normal white letterboxing on the square panel. No camera
+      control change or captured-pixel editing was performed in this session.
+- [ ] **Further qualification:** calibrated/persistent/repeatable optical colors,
+      154 RGB palettes beyond observed7 (experimental12 remains 266-only), actual
+      website/CLI hardware sessions, encrypted transfers, exhaustive interruptions,
+      cold power, energy/current and hardware stack high-water.
+
+The 154 is left displaying the detailed image on the verified native candidate,
+with boot suppression enabled; the 266 installation and image remain untouched.
